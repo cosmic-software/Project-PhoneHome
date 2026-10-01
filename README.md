@@ -172,3 +172,7 @@ phonehome/
 - The atmosphere is built to be seen from outside the shell. A camera inside it sees no sky.
 - One camera and one sun, both placed by lat/lon. Mission-driven placement (GMAT ephemeris,
   real sub-solar point from a timestamp) is the natural next step.
+
+## License
+
+Code: MIT, see [LICENSE](LICENSE). Imagery and elevation data come from NASA (GIBS, Visible Earth) and are public domain. The tileset repackages that data.
