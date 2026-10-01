@@ -123,6 +123,11 @@ select the Earth and look in **Object Properties**:
 | PhoneHome Clouds | Year / Month / Day + **Load Clouds**, the dates available offline, an **Offline (tileset only)** switch, **Cloud Brightness**, a **Relief** dropdown (Bump (fast) / Displacement (heavy)) with bump strength, billow and cloud height (offline: tileset dates only), **Haze Clamp** (ocean / land), Thin Cloud Boost + Cloud Ramp, show/hide |
 | PhoneHome Atmosphere | Sun picker, density / brightness / thickness / scale height / forward scatter, Sky Colour ramp, show/hide |
 
+Every setting is also stored as a property on the Earth object, under **Object Properties →
+Custom Properties**. Change values here directly, or animate them with keyframes:
+
+![The Earth's PhoneHome settings in Custom Properties](screenshots/custom-properties.png)
+
 The panel code is `phonehome/ui.py`. The `.blend` only embeds a small loader that finds
 this project folder around the file and registers the panel, so the `.blend` has to stay
 inside the project. Image paths are relative to `data/`. Rebuild the file after changing
