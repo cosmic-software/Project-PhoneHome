@@ -63,6 +63,8 @@ def parse_args(argv=None):
     c.add_argument("--cloud-relief-km", type=float, default=25.0,
                    help="displacement height of the densest cloud in km (default 25)")
     c.add_argument("--cloud-bump", type=float, default=0.5, help="bump strength 0..1 (default 0.5)")
+    c.add_argument("--cloud-brightness", type=float, default=0.75,
+                   help="cloud reflectance 0..1: 1 = pure white, real cloud tops ~0.6-0.8 (default 0.75)")
     c.add_argument("--haze-ocean", type=float, default=0.2,
                    help="haze clamp over water: mask values below this become clear sky (default 0.2)")
     c.add_argument("--haze-land", type=float, default=0.0,
@@ -119,7 +121,7 @@ def main(argv=None):
     if not args.no_clouds:
         clouds.build(earth_obj, date, boost=args.cloud_boost, relief_mode=args.cloud_relief,
                      relief_km=args.cloud_relief_km, bump=args.cloud_bump, billow=args.cloud_billow,
-                     haze_ocean=args.haze_ocean, haze_land=args.haze_land)
+                     haze_ocean=args.haze_ocean, haze_land=args.haze_land, brightness=args.cloud_brightness)
         print(f"Clouds: {date.isoformat()} ({args.cloud_relief})")
     if not args.no_atmosphere:
         atmosphere.build(earth_obj, sun, {k: getattr(args, k) for k in atmosphere.DEFAULTS})

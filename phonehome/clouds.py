@@ -53,7 +53,15 @@ DATE_PROP = "clouds_date"                               # date currently on the 
 DATE_PICK_PROPS = ("cloud_year", "cloud_month", "cloud_day")   # date boxes in the control panel
 DENSITY_GROUP = "Cloud Density"
 
-RELIEF_MODE_PROP = "cloud_relief_mode"        # "BUMP" or "DISPLACEMENT"
+# Registered enum (a dropdown), not a custom property: a string custom property shows up as
+# a free-text box that does nothing when typed into.
+RELIEF_PROP = "phonehome_cloud_relief"
+RELIEF_ITEMS = [
+    ('BUMP', "Bump (fast)", "Shading on the cloud tops only: full detail, no extra render cost"),
+    ('DISPLACEMENT', "Displacement (heavy)",
+     "Real cloud height and shadow offset; ~16x cloud geometry, slower renders and more memory"),
+]
+BRIGHTNESS_PROP = "cloud_brightness"          # cloud base colour (reflectance), 0..1
 RELIEF_KM_PROP = "cloud_relief_km"            # displacement height of the densest cloud
 BUMP_PROP = "cloud_bump"                      # bump strength 0..1
 RELIEF_MODES = ("BUMP", "DISPLACEMENT")
@@ -273,6 +281,7 @@ def build_density_group(earth_obj):
     ng.interface.new_socket("Mask", in_out='INPUT', socket_type='NodeSocketFloat')
     ng.interface.new_socket("Water", in_out='INPUT', socket_type='NodeSocketFloat')
     ng.interface.new_socket("Density", in_out='OUTPUT', socket_type='NodeSocketFloat')
+    ng.interface.new_socket("Brightness", in_out='OUTPUT', socket_type='NodeSocketFloat')
     nodes, links = ng.nodes, ng.links
 
     gin = nodes.new("NodeGroupInput")
@@ -348,6 +357,13 @@ def build_density_group(earth_obj):
     links.new(base.outputs[0], log.inputs[1])
     links.new(log.outputs[0], ramp.inputs["Fac"])
     links.new(ramp.outputs["Color"], gout.inputs["Density"])
+
+    brightness = nodes.new("ShaderNodeValue")
+    brightness.name = brightness.label = "Cloud Brightness"
+    brightness.location = (100, -250)
+    drivers.drive(brightness.outputs[0], "default_value", earth_obj,
+                  {"v": drivers.prop_path(BRIGHTNESS_PROP)}, "min(max(v, 0), 1)")
+    links.new(brightness.outputs[0], gout.inputs["Brightness"])
     return ng
 
 
@@ -383,6 +399,7 @@ def _cloud_material(lat0, lon0, group, height_group, mask_path, height_path, wat
     wtex.image.colorspace_settings.name = 'Non-Color'
     links.new(wtex.outputs["Color"], dens.inputs["Water"])
     links.new(dens.outputs["Density"], bsdf.inputs["Alpha"])
+    links.new(dens.outputs["Brightness"], bsdf.inputs["Base Color"])
 
     htex = nodes.new("ShaderNodeTexImage")
     htex.name = htex.label = "Cloud Height"
@@ -420,11 +437,7 @@ def _cloud_material(lat0, lon0, group, height_group, mask_path, height_path, wat
     return mat
 
 
-def set_relief_mode(earth_obj, clouds_obj, mode):
-    """Switch every cloud tile between bump-only and real displacement."""
-    mode = mode.upper()
-    if mode not in RELIEF_MODES:
-        raise ValueError(f"cloud relief mode {mode!r}: expected one of {RELIEF_MODES}")
+def _apply_relief(clouds_obj, mode):
     for mat in clouds_obj.data.materials:
         nodes, links = mat.node_tree.nodes, mat.node_tree.links
         out = nodes["Material Output"].inputs["Displacement"]
@@ -437,13 +450,35 @@ def set_relief_mode(earth_obj, clouds_obj, mode):
             mat.displacement_method = 'BUMP'
     sub = clouds_obj.modifiers["Subdivide"]
     sub.levels, sub.render_levels = RELIEF_SUBDIV[mode]
-    earth_obj[RELIEF_MODE_PROP] = mode
+
+
+def _relief_changed(self, context):
+    clouds_obj = bpy.data.objects.get(config.CLOUDS_NAME)
+    if clouds_obj is not None and self.name == config.EARTH_NAME:
+        _apply_relief(clouds_obj, getattr(self, RELIEF_PROP))
+
+
+def register_props():
+    """The relief dropdown on the Earth. Idempotent; used by the build and by the control panel."""
+    if not hasattr(bpy.types.Object, RELIEF_PROP):
+        setattr(bpy.types.Object, RELIEF_PROP, bpy.props.EnumProperty(
+            name="Cloud Relief", items=RELIEF_ITEMS, default='BUMP', update=_relief_changed))
+
+
+def set_relief_mode(earth_obj, clouds_obj, mode):
+    """Switch every cloud tile between bump-only and real displacement."""
+    mode = mode.upper()
+    if mode not in RELIEF_MODES:
+        raise ValueError(f"cloud relief mode {mode!r}: expected one of {RELIEF_MODES}")
+    register_props()
+    _apply_relief(clouds_obj, mode)          # explicit: setting an unchanged enum may not fire update
+    setattr(earth_obj, RELIEF_PROP, mode)
 
 
 # ---------------------------------------------------------------- object
 
 def build(earth_obj, date, boost=4.0, relief_mode="BUMP", relief_km=25.0, bump=0.5, billow=0.4,
-          haze_ocean=0.2, haze_land=0.0):
+          haze_ocean=0.2, haze_land=0.0, brightness=0.75):
     """Cloud shell sharing the Earth's mesh layout, UVs and tile order."""
     prepared = prepare(date)
 
@@ -466,6 +501,9 @@ def build(earth_obj, date, boost=4.0, relief_mode="BUMP", relief_km=25.0, bump=0
                             (HAZE_LAND_PROP, haze_land, "Haze clamp over land: mask values below this become clear sky")):
         drivers.set_prop(earth_obj, prop, val, desc, soft_max=0.95)
         earth_obj.id_properties_ui(prop).update(max=0.95, subtype='FACTOR')
+    drivers.set_prop(earth_obj, BRIGHTNESS_PROP, brightness, soft_max=1.0,
+                     description="Cloud brightness (reflectance): 1 = pure white, real cloud tops ~0.6-0.8")
+    earth_obj.id_properties_ui(BRIGHTNESS_PROP).update(max=1.0, subtype='FACTOR')
     group = build_density_group(earth_obj)
     height_group = build_height_group(earth_obj)
 

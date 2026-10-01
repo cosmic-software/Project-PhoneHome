@@ -8,7 +8,8 @@ Panels:
   PhoneHome Earth       terrain exaggeration; oceans: bathymetric map <-> water shader slider,
                         water colour, water roughness
   PhoneHome Clouds      date boxes + Load Clouds, cached (offline) dates, offline switch,
-                        relief mode (Bump / Displacement) + strength/height,
+                        cloud brightness, relief mode dropdown (Bump / Displacement)
+                        + strength/billow/height,
                         thin-cloud boost + Cloud Ramp, show/hide
   PhoneHome Atmosphere  sun picker, density/brightness/thickness/scale height/forward
                         scatter, Sky Colour ramp, show/hide
@@ -144,27 +145,6 @@ class PHONEHOME_OT_load_clouds(bpy.types.Operator):
         return {'FINISHED'}
 
 
-class PHONEHOME_OT_cloud_relief(bpy.types.Operator):
-    """Switch cloud relief between bump (fast) and real displacement (heavier render)"""
-    bl_idname = "phonehome.cloud_relief"
-    bl_label = "Cloud Relief"
-    bl_options = {'REGISTER', 'UNDO'}
-
-    mode: bpy.props.EnumProperty(items=[
-        ('BUMP', "Bump", "Shading only: full detail, no extra render cost"),
-        ('DISPLACEMENT', "Displacement", "Real cloud height and shadow offset; ~16x cloud geometry, slower"),
-    ])
-
-    def execute(self, context):
-        earth_obj = bpy.data.objects.get(config.EARTH_NAME)
-        clouds_obj = bpy.data.objects.get(config.CLOUDS_NAME)
-        if earth_obj is None or clouds_obj is None:
-            self.report({'ERROR'}, "Earth / Clouds objects not found")
-            return {'CANCELLED'}
-        clouds.set_relief_mode(earth_obj, clouds_obj, self.mode)
-        return {'FINISHED'}
-
-
 # ---------------------------------------------------------------- panels
 
 class _EarthPanel:
@@ -222,15 +202,13 @@ class PHONEHOME_PT_clouds(_EarthPanel, bpy.types.Panel):
         for d in dates[-6:]:
             layout.label(text=f"    {d.isoformat()}")
 
+        if clouds.BRIGHTNESS_PROP in obj:
+            layout.prop(obj, f'["{clouds.BRIGHTNESS_PROP}"]', text="Cloud Brightness", slider=True)
+
         relief = layout.box()
         relief.label(text="Cloud relief (shading + shadows)")
-        mode = obj.get(clouds.RELIEF_MODE_PROP, "BUMP")
-        row = relief.row(align=True)
-        op = row.operator(PHONEHOME_OT_cloud_relief.bl_idname, text="Bump (fast)", depress=mode == "BUMP")
-        op.mode = 'BUMP'
-        op = row.operator(PHONEHOME_OT_cloud_relief.bl_idname, text="Displacement (heavy)",
-                          depress=mode == "DISPLACEMENT")
-        op.mode = 'DISPLACEMENT'
+        relief.prop(obj, clouds.RELIEF_PROP, text="Mode")
+        mode = getattr(obj, clouds.RELIEF_PROP)
         if clouds.BUMP_PROP in obj:
             relief.prop(obj, f'["{clouds.BUMP_PROP}"]', text="Bump Strength", slider=True)
         if clouds.BILLOW_PROP in obj:
@@ -272,8 +250,7 @@ class PHONEHOME_PT_atmosphere(_EarthPanel, bpy.types.Panel):
         _visibility(layout, config.ATMOSPHERE_NAME, "Atmosphere")
 
 
-_classes = (PHONEHOME_OT_load_clouds, PHONEHOME_OT_cloud_relief, PHONEHOME_PT_terrain, PHONEHOME_PT_clouds,
-            PHONEHOME_PT_atmosphere)
+_classes = (PHONEHOME_OT_load_clouds, PHONEHOME_PT_terrain, PHONEHOME_PT_clouds, PHONEHOME_PT_atmosphere)
 
 
 def register():
@@ -284,6 +261,7 @@ def register():
         name="Offline (tileset only)",
         description="Never download: use only tiles already on disk (installed tileset / cache)",
         update=_offline_update)
+    clouds.register_props()
 
 
 def unregister():
@@ -292,3 +270,5 @@ def unregister():
             bpy.utils.unregister_class(getattr(bpy.types, c.__name__))
     if hasattr(bpy.types.Scene, "phonehome_offline"):
         del bpy.types.Scene.phonehome_offline
+    if hasattr(bpy.types.Object, clouds.RELIEF_PROP):
+        delattr(bpy.types.Object, clouds.RELIEF_PROP)

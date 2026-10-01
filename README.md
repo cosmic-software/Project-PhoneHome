@@ -101,6 +101,7 @@ blender --background --factory-startup --python run_phonehome.py -- [options]
 | `--cloud-relief bump\|displacement` | bump | cloud shading only (fast), or real cloud height and shadow offset (~16× cloud geometry, slower) |
 | `--cloud-bump`, `--cloud-billow`, `--cloud-relief-km` | 0.5, 0.4, 25 | relief strength, billow texture, cloud height |
 | `--haze-ocean`, `--haze-land` | 0.2, 0 | haze clamp: cloud values below this become clear sky |
+| `--cloud-brightness` | 0.75 | cloud reflectance: 1 = pure white, real cloud tops ~0.6–0.8 |
 | `--atmo-density`, `--atmo-brightness`, `--atmo-thickness-km`, `--atmo-scale-height`, `--atmo-forward-scatter` | 0.08, 0.6, 100, 0.25, 2 | atmosphere look |
 | `--engine`, `--samples`, `--resolution` | EEVEE, engine default, 1024 | render settings |
 | `--render PATH` / `--no-render` | `output/phonehome_<date>.png` | where to write the PNG |
@@ -119,7 +120,7 @@ select the Earth and look in **Object Properties**:
 | Panel | Controls |
 |---|---|
 | PhoneHome Earth | terrain exaggeration; **Water Shader** slider (0 = bathymetric map, 1 = flat water with sun glint), water colour, water roughness |
-| PhoneHome Clouds | Year / Month / Day + **Load Clouds**, the dates available offline, an **Offline (tileset only)** switch, **Bump (fast) / Displacement (heavy)** relief buttons with bump strength, billow and cloud height (offline: tileset dates only), **Haze Clamp** (ocean / land), Thin Cloud Boost + Cloud Ramp, show/hide |
+| PhoneHome Clouds | Year / Month / Day + **Load Clouds**, the dates available offline, an **Offline (tileset only)** switch, **Cloud Brightness**, a **Relief** dropdown (Bump (fast) / Displacement (heavy)) with bump strength, billow and cloud height (offline: tileset dates only), **Haze Clamp** (ocean / land), Thin Cloud Boost + Cloud Ramp, show/hide |
 | PhoneHome Atmosphere | Sun picker, density / brightness / thickness / scale height / forward scatter, Sky Colour ramp, show/hide |
 
 The panel code is `phonehome/ui.py`. The `.blend` only embeds a small loader that finds
