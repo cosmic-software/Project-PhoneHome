@@ -1,0 +1,19 @@
+# Downloaded / generated NASA tiles -- the pipeline recreates them on demand
+data/
+
+# Renders, and any .blend except the project one (rebuild it with the command in README)
+output/
+*.blend
+!blender/phonehome.blend
+*.blend1
+
+# Packed tilesets are release assets, not source
+*.zip
+
+# Python
+__pycache__/
+*.pyc
+
+# OS cruft
+.DS_Store
+Thumbs.db
