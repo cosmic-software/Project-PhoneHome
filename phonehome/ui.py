@@ -8,6 +8,7 @@ Panels:
   PhoneHome Earth       terrain exaggeration; oceans: bathymetric map <-> water shader slider,
                         water colour, water roughness
   PhoneHome Clouds      date boxes + Load Clouds, cached (offline) dates, offline switch,
+                        relief mode (Bump / Displacement) + strength/height,
                         thin-cloud boost + Cloud Ramp, show/hide
   PhoneHome Atmosphere  sun picker, density/brightness/thickness/scale height/forward
                         scatter, Sky Colour ramp, show/hide
@@ -110,7 +111,7 @@ class PHONEHOME_OT_load_clouds(bpy.types.Operator):
 
         def work():
             try:
-                self._state["paths"] = clouds.fetch_cloud_tiles(
+                self._state["paths"] = clouds.prepare(
                     self._date, lambda d, t: self._state.update(done=d, total=t))
             except Exception as e:  # reported back on the main thread
                 self._state["error"] = str(e)
@@ -140,6 +141,27 @@ class PHONEHOME_OT_load_clouds(bpy.types.Operator):
         global _dates_cache
         _dates_cache = (0.0, [])
         self.report({'INFO'}, f"Clouds loaded for {self._date}")
+        return {'FINISHED'}
+
+
+class PHONEHOME_OT_cloud_relief(bpy.types.Operator):
+    """Switch cloud relief between bump (fast) and real displacement (heavier render)"""
+    bl_idname = "phonehome.cloud_relief"
+    bl_label = "Cloud Relief"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    mode: bpy.props.EnumProperty(items=[
+        ('BUMP', "Bump", "Shading only: full detail, no extra render cost"),
+        ('DISPLACEMENT', "Displacement", "Real cloud height and shadow offset; ~16x cloud geometry, slower"),
+    ])
+
+    def execute(self, context):
+        earth_obj = bpy.data.objects.get(config.EARTH_NAME)
+        clouds_obj = bpy.data.objects.get(config.CLOUDS_NAME)
+        if earth_obj is None or clouds_obj is None:
+            self.report({'ERROR'}, "Earth / Clouds objects not found")
+            return {'CANCELLED'}
+        clouds.set_relief_mode(earth_obj, clouds_obj, self.mode)
         return {'FINISHED'}
 
 
@@ -200,8 +222,29 @@ class PHONEHOME_PT_clouds(_EarthPanel, bpy.types.Panel):
         for d in dates[-6:]:
             layout.label(text=f"    {d.isoformat()}")
 
+        relief = layout.box()
+        relief.label(text="Cloud relief (shading + shadows)")
+        mode = obj.get(clouds.RELIEF_MODE_PROP, "BUMP")
+        row = relief.row(align=True)
+        op = row.operator(PHONEHOME_OT_cloud_relief.bl_idname, text="Bump (fast)", depress=mode == "BUMP")
+        op.mode = 'BUMP'
+        op = row.operator(PHONEHOME_OT_cloud_relief.bl_idname, text="Displacement (heavy)",
+                          depress=mode == "DISPLACEMENT")
+        op.mode = 'DISPLACEMENT'
+        if clouds.BUMP_PROP in obj:
+            relief.prop(obj, f'["{clouds.BUMP_PROP}"]', text="Bump Strength", slider=True)
+        if clouds.BILLOW_PROP in obj:
+            relief.prop(obj, f'["{clouds.BILLOW_PROP}"]', text="Billow (texture)", slider=True)
+        if mode == "DISPLACEMENT":
+            relief.prop(obj, f'["{clouds.RELIEF_KM_PROP}"]', text="Cloud Height (km)")
+            relief.label(text="~16x cloud geometry: slower renders, more memory", icon='INFO')
+
         box = layout.box()
         box.label(text="Cloud density (all tiles)")
+        if clouds.HAZE_OCEAN_PROP in obj:
+            row = box.row(align=True)
+            row.prop(obj, f'["{clouds.HAZE_OCEAN_PROP}"]', text="Haze Clamp Ocean", slider=True)
+            row.prop(obj, f'["{clouds.HAZE_LAND_PROP}"]', text="Land", slider=True)
         box.prop(obj, f'["{clouds.BOOST_PROP}"]', text="Thin Cloud Boost (log)")
         ng = bpy.data.node_groups.get(clouds.DENSITY_GROUP)
         if ng and "Cloud Ramp" in ng.nodes:
@@ -229,7 +272,8 @@ class PHONEHOME_PT_atmosphere(_EarthPanel, bpy.types.Panel):
         _visibility(layout, config.ATMOSPHERE_NAME, "Atmosphere")
 
 
-_classes = (PHONEHOME_OT_load_clouds, PHONEHOME_PT_terrain, PHONEHOME_PT_clouds, PHONEHOME_PT_atmosphere)
+_classes = (PHONEHOME_OT_load_clouds, PHONEHOME_OT_cloud_relief, PHONEHOME_PT_terrain, PHONEHOME_PT_clouds,
+            PHONEHOME_PT_atmosphere)
 
 
 def register():

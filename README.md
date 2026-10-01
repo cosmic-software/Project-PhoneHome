@@ -31,6 +31,11 @@ python -m phonehome.tileset install
 
 Skip this step and PhoneHome downloads tiles from NASA as it needs them.
 
+> **Offline use: clouds are limited to the dates in the tileset.** The tileset includes cloud
+> data for **2026-09-28** and **2026-09-29**. Off network, cloud relief (Bump / Displacement)
+> works only on those dates: use `--clouds 2026-09-29` (or pick one of those dates in the panel).
+> Loading clouds for any other date needs a network connection.
+
 **3a. Render a picture**
 
 ```
@@ -93,6 +98,9 @@ blender --background --factory-startup --python run_phonehome.py -- [options]
 | `--sun-lat`, `--sun-lon` | 10, 70 | sub-solar point (where the sun is overhead) |
 | `--view-lat`, `--view-lon`, `--view-dist` | 20, 0, 3.5 | camera position (distance in Earth radii) |
 | `--cloud-boost` | 4 | thin-cloud log curve: 0 = linear |
+| `--cloud-relief bump\|displacement` | bump | cloud shading only (fast), or real cloud height and shadow offset (~16× cloud geometry, slower) |
+| `--cloud-bump`, `--cloud-billow`, `--cloud-relief-km` | 0.5, 0.4, 25 | relief strength, billow texture, cloud height |
+| `--haze-ocean`, `--haze-land` | 0.2, 0 | haze clamp: cloud values below this become clear sky |
 | `--atmo-density`, `--atmo-brightness`, `--atmo-thickness-km`, `--atmo-scale-height`, `--atmo-forward-scatter` | 0.08, 0.6, 100, 0.25, 2 | atmosphere look |
 | `--engine`, `--samples`, `--resolution` | EEVEE, engine default, 1024 | render settings |
 | `--render PATH` / `--no-render` | `output/phonehome_<date>.png` | where to write the PNG |
@@ -111,7 +119,7 @@ select the Earth and look in **Object Properties**:
 | Panel | Controls |
 |---|---|
 | PhoneHome Earth | terrain exaggeration; **Water Shader** slider (0 = bathymetric map, 1 = flat water with sun glint), water colour, water roughness |
-| PhoneHome Clouds | Year / Month / Day + **Load Clouds**, the dates available offline, an **Offline (tileset only)** switch, Thin Cloud Boost + Cloud Ramp, show/hide |
+| PhoneHome Clouds | Year / Month / Day + **Load Clouds**, the dates available offline, an **Offline (tileset only)** switch, **Bump (fast) / Displacement (heavy)** relief buttons with bump strength, billow and cloud height (offline: tileset dates only), **Haze Clamp** (ocean / land), Thin Cloud Boost + Cloud Ramp, show/hide |
 | PhoneHome Atmosphere | Sun picker, density / brightness / thickness / scale height / forward scatter, Sky Colour ramp, show/hide |
 
 The panel code is `phonehome/ui.py`. The `.blend` only embeds a small loader that finds
@@ -136,6 +144,8 @@ python -m phonehome.tileset install phonehome-tiles.zip              # or your o
 ```
 
 The base tileset (colour + terrain, 1,296 tiles) is ~34 MB, plus ~45 MB per cloud date.
+
+**What works offline:** the Earth, terrain, oceans and atmosphere work for any setting. Clouds, including cloud relief (Bump and Displacement), work **only for the cloud dates in the tileset**. The published tileset has **2026-09-28** and **2026-09-29**, so offline renders and displacement must use one of those dates. Cloud height maps for those dates are made locally the first time (~3 min), with no network. Any other cloud date has to be downloaded from NASA first.
 Install checks the manifest and refuses unexpected paths. With `--offline` (CLI), or the
 **Offline** switch in the panel, nothing is downloaded. A missing tile or cloud date
 fails with a message that names the tileset, instead of reaching for the network.
@@ -152,6 +162,7 @@ given date touches the network:
 | `terrain_tiles/` | ~20 MB | heightmap cut into per-tile PNGs |
 | `water_tiles/` | ~3 MB | water masks, made locally from the colour + terrain tiles (no download) |
 | `cloud_tiles/YYYY-MM-DD/` | ~45 MB per date | cloud masks; a new date takes about 3 minutes |
+| `cloud_tiles/YYYY-MM-DD/height/` | ~57 MB per date | cloud heights, made locally from the masks the first time a date is used (~3 min, no download) |
 
 ## Layout
 

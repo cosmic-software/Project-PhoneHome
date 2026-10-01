@@ -264,10 +264,14 @@ def build(earth_obj, sun, settings=None):
     atmo.visible_volume_scatter = False
     earth.add_sphere_modifiers(atmo, 3, 4)
 
+    # The atmosphere sits above the tallest displaced cloud too.
+    if clouds.RELIEF_KM_PROP not in earth_obj:
+        earth_obj[clouds.RELIEF_KM_PROP] = 0.0
     r = config.RADIUS_KM
     variables = {"exag": drivers.prop_path(config.EXAGGERATION_PROP),
-                 "thick": drivers.prop_path("atmosphere_thickness_km")}
+                 "thick": drivers.prop_path("atmosphere_thickness_km"),
+                 "relief": drivers.prop_path(clouds.RELIEF_KM_PROP)}
     for axis in range(3):
         drivers.drive(atmo, "scale", earth_obj, variables,
-                      f"({r} + {clouds.shell_altitude_expr()} + thick) / {r}", axis)
+                      f"({r} + {clouds.shell_altitude_expr()} + relief + thick) / {r}", axis)
     return atmo

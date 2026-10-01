@@ -57,6 +57,18 @@ def parse_args(argv=None):
     c.add_argument("--no-clouds", action="store_true")
     c.add_argument("--cloud-boost", type=float, default=4.0,
                    help="log curve on thin cloud: 0 = linear, higher = more opaque (default 4)")
+    c.add_argument("--cloud-relief", choices=["bump", "displacement"], default="bump",
+                   help="bump: shading only, fast (default); displacement: real cloud height + "
+                        "shadow offset, ~16x cloud geometry, slower")
+    c.add_argument("--cloud-relief-km", type=float, default=25.0,
+                   help="displacement height of the densest cloud in km (default 25)")
+    c.add_argument("--cloud-bump", type=float, default=0.5, help="bump strength 0..1 (default 0.5)")
+    c.add_argument("--haze-ocean", type=float, default=0.2,
+                   help="haze clamp over water: mask values below this become clear sky (default 0.2)")
+    c.add_argument("--haze-land", type=float, default=0.0,
+                   help="haze clamp over land (default 0)")
+    c.add_argument("--cloud-billow", type=float, default=0.4,
+                   help="3D noise texture on cloud tops 0..1 (default 0.4)")
 
     a = p.add_argument_group("atmosphere")
     a.add_argument("--no-atmosphere", action="store_true")
@@ -105,8 +117,10 @@ def main(argv=None):
           f"terrain x{args.exaggeration}")
 
     if not args.no_clouds:
-        clouds.build(earth_obj, date, boost=args.cloud_boost)
-        print(f"Clouds: {date.isoformat()}")
+        clouds.build(earth_obj, date, boost=args.cloud_boost, relief_mode=args.cloud_relief,
+                     relief_km=args.cloud_relief_km, bump=args.cloud_bump, billow=args.cloud_billow,
+                     haze_ocean=args.haze_ocean, haze_land=args.haze_land)
+        print(f"Clouds: {date.isoformat()} ({args.cloud_relief})")
     if not args.no_atmosphere:
         atmosphere.build(earth_obj, sun, {k: getattr(args, k) for k in atmosphere.DEFAULTS})
         print(f"Atmosphere: lit by '{sun.name}'")

@@ -26,6 +26,9 @@ def add_sun(lat_deg, lon_deg, strength=4.0):
     """Sun lamp shining from the given sub-solar lat/lon."""
     data = bpy.data.lights.new(config.SUN_NAME, 'SUN')
     data.energy = strength
+    # EEVEE's default is 0.001 units = 1 m at our km scale: it overflows the shadow pool
+    # ("Shadow buffer full") and drops shadows. 200 m is finer than a render pixel here.
+    data.shadow_maximum_resolution = 0.2
     sun = bpy.data.objects.new(config.SUN_NAME, data)
     bpy.context.scene.collection.objects.link(sun)
     _look(sun, -unit(lat_deg, lon_deg))
@@ -57,6 +60,8 @@ def add_world(colour=(0.02, 0.02, 0.02)):
 def render(path, engine='BLENDER_EEVEE', resolution=1024, samples=None):
     scene = bpy.context.scene
     scene.render.engine = engine
+    if engine == 'BLENDER_EEVEE':
+        scene.eevee.shadow_pool_size = '1024'
     if samples is not None:
         if engine == 'CYCLES':
             scene.cycles.samples = samples
@@ -74,6 +79,7 @@ def save_blend(path):
     from anywhere inside the project folder (data/ next to it).
     """
     from . import ui
+    bpy.context.scene.eevee.shadow_pool_size = '1024'   # same as render(); see add_sun()
     r = config.RADIUS_KM
     for screen in bpy.data.screens:
         for area in screen.areas:
