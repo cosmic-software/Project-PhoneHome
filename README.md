@@ -47,7 +47,8 @@ Open `blender/phonehome.blend` and click **Allow Execution**:
 ![Allow Execution prompt](screenshots/allow-execution.png)
 
 Click the Earth, then open **Object Properties**. The **PhoneHome** panels set terrain
-height, pick a cloud date (**Load Clouds**), and tune the clouds and atmosphere.
+height, switch the oceans between the bathymetric map and a water shader, pick a cloud date
+(**Load Clouds**), and tune the clouds and atmosphere.
 
 ---
 
@@ -83,6 +84,8 @@ blender --background --factory-startup --python run_phonehome.py -- [options]
 |---|---|---|
 | `--clouds YYYY-MM-DD` | yesterday (UTC) | cloud imagery date; VIIRS NOAA-20 from 2018, NOAA-21 from 2023 |
 | `--exaggeration` | 20 | terrain height ×; clouds and atmosphere rise with it |
+| `--ocean-water` | 0 | oceans: 0 = bathymetric map, 1 = water shader |
+| `--ocean-roughness`, `--ocean-colour RRGGBB` | 0.3, deep blue | water shader glint and colour |
 | `--sun-lat`, `--sun-lon` | 10, 70 | sub-solar point (where the sun is overhead) |
 | `--view-lat`, `--view-lon`, `--view-dist` | 20, 0, 3.5 | camera position (distance in Earth radii) |
 | `--cloud-boost` | 4 | thin-cloud log curve: 0 = linear |
@@ -103,7 +106,7 @@ select the Earth and look in **Object Properties**:
 
 | Panel | Controls |
 |---|---|
-| PhoneHome Terrain | terrain exaggeration |
+| PhoneHome Earth | terrain exaggeration; **Water Shader** slider (0 = bathymetric map, 1 = flat water with sun glint), water colour, water roughness |
 | PhoneHome Clouds | Year / Month / Day + **Load Clouds**, the dates available offline, an **Offline (tileset only)** switch, Thin Cloud Boost + Cloud Ramp, show/hide |
 | PhoneHome Atmosphere | Sun picker, density / brightness / thickness / scale height / forward scatter, Sky Colour ramp, show/hide |
 
@@ -143,6 +146,7 @@ given date touches the network:
 | `earth_tiles/` | ~14 MB | 648 GIBS colour tiles |
 | `gebco_08_rev_elev_21600x10800.png` | 18 MB | world heightmap (downloaded once) |
 | `terrain_tiles/` | ~20 MB | heightmap cut into per-tile PNGs |
+| `water_tiles/` | ~3 MB | water masks, made locally from the colour + terrain tiles (no download) |
 | `cloud_tiles/YYYY-MM-DD/` | ~45 MB per date | cloud masks; a new date takes about 3 minutes |
 
 ## Layout

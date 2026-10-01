@@ -5,7 +5,8 @@ which finds this project folder next to the .blend. All the code lives here in t
 package; the .blend only carries the loader.
 
 Panels:
-  PhoneHome Terrain     terrain exaggeration
+  PhoneHome Earth       terrain exaggeration; oceans: bathymetric map <-> water shader slider,
+                        water colour, water roughness
   PhoneHome Clouds      date boxes + Load Clouds, cached (offline) dates, offline switch,
                         thin-cloud boost + Cloud Ramp, show/hide
   PhoneHome Atmosphere  sun picker, density/brightness/thickness/scale height/forward
@@ -19,7 +20,7 @@ import time
 
 import bpy
 
-from . import atmosphere, clouds, config, net, tileset
+from . import atmosphere, clouds, config, earth, net, tileset
 
 LOADER_NAME = "phonehome_ui.py"
 LOADER = '''"""PhoneHome control panel loader -- runs when this .blend opens (click Allow Execution).
@@ -163,10 +164,20 @@ def _visibility(layout, name, label):
 
 
 class PHONEHOME_PT_terrain(_EarthPanel, bpy.types.Panel):
-    bl_label = "PhoneHome Terrain"
+    bl_label = "PhoneHome Earth"
 
     def draw(self, context):
-        self.layout.prop(_earth(context), f'["{config.EXAGGERATION_PROP}"]', text="Terrain Exaggeration")
+        obj, layout = _earth(context), self.layout
+        layout.prop(obj, f'["{config.EXAGGERATION_PROP}"]', text="Terrain Exaggeration")
+        if earth.OCEAN_WATER_PROP not in obj:
+            return
+        box = layout.box()
+        box.label(text="Oceans: 0 = bathymetric map, 1 = water shader")
+        box.prop(obj, f'["{earth.OCEAN_WATER_PROP}"]', text="Water Shader", slider=True)
+        ng = bpy.data.node_groups.get(earth.OCEAN_GROUP)
+        if ng and "Ocean Colour" in ng.nodes:
+            box.prop(ng.nodes["Ocean Colour"].outputs[0], "default_value", text="Water Colour")
+        box.prop(obj, f'["{earth.OCEAN_ROUGHNESS_PROP}"]', text="Water Roughness (glint)")
 
 
 class PHONEHOME_PT_clouds(_EarthPanel, bpy.types.Panel):

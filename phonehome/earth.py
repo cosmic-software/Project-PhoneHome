@@ -17,6 +17,11 @@ Height drives a Displacement node (Displacement and Bump) whose Scale is driven 
 Earth["terrain_exaggeration"] (1 = true relief). A Simple Subdivision + Cast modifier
 pair gives the displacement geometry to move while the base mesh stays at 614 verts.
 
+Oceans: a per-tile water mask (sea-level height AND blue-dominant colour, derived offline
+from the colour + terrain tiles) feeds the shared "Ocean" node group. Earth["ocean_water"]
+slides every tile between the bathymetric Blue Marble ocean (0) and a flat water shader
+with sun glint (1); its colour is the group's "Ocean Colour" node.
+
 The mesh is Earth-fixed: +X through (lat 0, lon 0), +Y through (lat 0, lon 90E), +Z north.
 """
 
@@ -37,6 +42,12 @@ HEIGHT_URL = ("https://eoimages.gsfc.nasa.gov/images/imagerecords/73000/73934/"
               "gebco_08_rev_elev_21600x10800.png")
 HEIGHT_WORLD_FILE = "gebco_08_rev_elev_21600x10800.png"
 HEIGHT_MAX_KM = 6.4          # pixel value 255 in the NASA topography map
+
+OCEAN_GROUP = "Ocean"
+OCEAN_WATER_PROP = "ocean_water"          # 0 = bathymetric map, 1 = water shader
+OCEAN_ROUGHNESS_PROP = "ocean_roughness"
+OCEAN_COLOUR_DEFAULT = (0.0015, 0.005, 0.022)   # linear RGB; deep open ocean seen from orbit
+LAND_ROUGHNESS = 0.8
 
 
 class _Frozen(type):
@@ -59,7 +70,8 @@ class EarthSphere(metaclass=_Frozen):
         raise TypeError("EarthSphere cannot be subclassed")
 
     @classmethod
-    def build(cls, tile_px=512, exaggeration=20.0):
+    def build(cls, tile_px=512, exaggeration=20.0, ocean_water=0.0, ocean_roughness=0.3,
+              ocean_colour=OCEAN_COLOUR_DEFAULT):
         bpy.ops.mesh.primitive_uv_sphere_add(
             segments=cls.SEGMENTS,
             ring_count=cls.RINGS,
@@ -80,9 +92,17 @@ class EarthSphere(metaclass=_Frozen):
         drivers.set_prop(obj, config.EXAGGERATION_PROP, exaggeration, soft_max=100.0,
                          description=f"Terrain height multiplier (1 = true relief, {HEIGHT_MAX_KM} km max)")
 
+        drivers.set_prop(obj, OCEAN_WATER_PROP, ocean_water, soft_max=1.0,
+                         description="Oceans: 0 = bathymetric map, 1 = water shader")
+        obj.id_properties_ui(OCEAN_WATER_PROP).update(max=1.0, subtype='FACTOR')
+        drivers.set_prop(obj, OCEAN_ROUGHNESS_PROP, ocean_roughness, soft_max=1.0,
+                         description="Water shader roughness: lower = tighter, brighter sun glint")
+
         colour = fetch_colour_tiles(tile_px)
         height = cut_height_tiles()
-        _assign_tiles(obj, colour, height)
+        water = make_water_tiles(colour, height)
+        ocean = build_ocean_group(obj, ocean_colour)
+        _assign_tiles(obj, colour, height, water, ocean)
         add_sphere_modifiers(obj, cls.SUBDIV_VIEWPORT, cls.SUBDIV_RENDER)
         return obj
 
@@ -206,23 +226,130 @@ def cut_height_tiles():
     return paths
 
 
+# ---------------------------------------------------------------- water mask tiles (derived, offline)
+
+def water_tile_path(lat0, lon0):
+    return config.data_path("water_tiles", f"water_{lat0:+03d}_{lon0:+04d}.png")
+
+
+def make_water_tiles(colour, height):
+    """Water mask per tile, made from tiles already on disk -- no downloads.
+
+    Water = height exactly at sea level (0 in the NASA topography map) AND blue-dominant
+    in the Blue Marble colour. The colour test keeps low-lying land (deltas, polders,
+    coastal plains, also height 0) as land; the height test keeps blue-looking land
+    (lakes above sea level, glaciers) as land.
+    """
+    tiles = config.tiles()
+    os.makedirs(config.data_path("water_tiles"), exist_ok=True)
+    paths = {t: water_tile_path(*t) for t in tiles}
+    missing = [t for t in tiles if not os.path.exists(paths[t])]
+    if missing:
+        print(f"Making {len(missing)} of {len(tiles)} water mask tiles from the cached tiles...")
+    for key in missing:
+        rgb = images.read_rgb(colour[key])
+        n = rgb.shape[0]
+        h = images.read(height[key], oiio.UINT8)[:, :, 0]
+        # height tiles are (600 + 1) px covering the same box; sample them at the colour pixels
+        idx = np.round(np.linspace(0, h.shape[0] - 1, n)).astype(int)
+        sea_level = h[np.ix_(idx, idx)] == 0
+        blue = (rgb[:, :, 2] > rgb[:, :, 0]) & (rgb[:, :, 2] >= rgb[:, :, 1])
+        images.write_gray8(paths[key], ((sea_level & blue) * 255).astype(np.uint8))
+    return paths
+
+
+def build_ocean_group(earth_obj, ocean_colour):
+    """Shared group: tile colour + water mask in, final colour + roughness out.
+
+    factor = water mask * Earth["ocean_water"]; one slider moves all 648 tiles between the
+    bathymetric map and the water shader.
+    """
+    ng = bpy.data.node_groups.get(OCEAN_GROUP)
+    if ng is not None:
+        return ng
+    ng = bpy.data.node_groups.new(OCEAN_GROUP, "ShaderNodeTree")
+    ng.interface.new_socket("Map Colour", in_out='INPUT', socket_type='NodeSocketColor')
+    ng.interface.new_socket("Water", in_out='INPUT', socket_type='NodeSocketFloat')
+    ng.interface.new_socket("Colour", in_out='OUTPUT', socket_type='NodeSocketColor')
+    ng.interface.new_socket("Roughness", in_out='OUTPUT', socket_type='NodeSocketFloat')
+    nodes, links = ng.nodes, ng.links
+    gin = nodes.new("NodeGroupInput")
+    gin.location = (-700, 0)
+    gout = nodes.new("NodeGroupOutput")
+    gout.location = (500, 0)
+
+    slider = nodes.new("ShaderNodeValue")
+    slider.name = slider.label = "Water Shader"
+    slider.location = (-700, -250)
+    drivers.drive(slider.outputs[0], "default_value", earth_obj,
+                  {"w": drivers.prop_path(OCEAN_WATER_PROP)}, "min(max(w, 0), 1)")
+    rough = nodes.new("ShaderNodeValue")
+    rough.name = rough.label = "Ocean Roughness"
+    rough.location = (-700, -400)
+    drivers.drive(rough.outputs[0], "default_value", earth_obj,
+                  {"r": drivers.prop_path(OCEAN_ROUGHNESS_PROP)}, "r")
+    ocean = nodes.new("ShaderNodeRGB")
+    ocean.name = ocean.label = "Ocean Colour"
+    ocean.location = (-450, 200)
+    ocean.outputs[0].default_value = (*ocean_colour, 1.0)
+
+    fac = nodes.new("ShaderNodeMath")
+    fac.operation = 'MULTIPLY'
+    fac.use_clamp = True
+    fac.location = (-450, -150)
+    links.new(gin.outputs["Water"], fac.inputs[0])
+    links.new(slider.outputs[0], fac.inputs[1])
+
+    col = nodes.new("ShaderNodeMix")
+    col.data_type = 'RGBA'
+    col.location = (100, 100)
+    links.new(fac.outputs[0], col.inputs["Factor"])
+    links.new(gin.outputs["Map Colour"], col.inputs["A"])
+    links.new(ocean.outputs[0], col.inputs["B"])
+    links.new(col.outputs["Result"], gout.inputs["Colour"])
+
+    r = nodes.new("ShaderNodeMix")
+    r.data_type = 'FLOAT'
+    r.location = (100, -200)
+    r.inputs["A"].default_value = LAND_ROUGHNESS
+    links.new(fac.outputs[0], r.inputs["Factor"])
+    links.new(rough.outputs[0], r.inputs["B"])
+    links.new(r.outputs["Result"], gout.inputs["Roughness"])
+    return ng
+
+
 # ---------------------------------------------------------------- materials
 
-def tile_material(lat0, lon0, colour_path, height_path, earth):
+def tile_material(lat0, lon0, colour_path, height_path, water_path, ocean_group, earth):
     mat = bpy.data.materials.new(f"Earth_{lat0:+03d}_{lon0:+04d}")
     mat["tile_lat0"], mat["tile_lon0"] = lat0, lon0
     mat.displacement_method = 'BOTH'
     nodes, links = mat.node_tree.nodes, mat.node_tree.links
     bsdf = nodes.get("Principled BSDF")
     output = nodes.get("Material Output")
-    bsdf.inputs["Roughness"].default_value = 0.8
+    bsdf.inputs["Roughness"].default_value = LAND_ROUGHNESS
 
     tex = nodes.new("ShaderNodeTexImage")
     tex.name = tex.label = "Colour"
     tex.location = (-400, 300)
     tex.image = bpy.data.images.load(colour_path, check_existing=True)
     tex.extension = 'EXTEND'   # stop edge pixels wrapping to the opposite side of the tile
-    links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
+
+    wtex = nodes.new("ShaderNodeTexImage")
+    wtex.name = wtex.label = "Water Mask"
+    wtex.location = (-400, 0)
+    wtex.image = bpy.data.images.load(water_path, check_existing=True)
+    wtex.image.colorspace_settings.name = 'Non-Color'
+    wtex.extension = 'EXTEND'
+
+    ocean = nodes.new("ShaderNodeGroup")
+    ocean.name = ocean.label = OCEAN_GROUP
+    ocean.node_tree = ocean_group
+    ocean.location = (-150, 200)
+    links.new(tex.outputs["Color"], ocean.inputs["Map Colour"])
+    links.new(wtex.outputs["Color"], ocean.inputs["Water"])
+    links.new(ocean.outputs["Colour"], bsdf.inputs["Base Color"])
+    links.new(ocean.outputs["Roughness"], bsdf.inputs["Roughness"])
 
     htex = nodes.new("ShaderNodeTexImage")
     htex.name = htex.label = "Height"
@@ -244,7 +371,7 @@ def tile_material(lat0, lon0, colour_path, height_path, earth):
     return mat
 
 
-def _assign_tiles(obj, colour, height):
+def _assign_tiles(obj, colour, height, water, ocean_group):
     step = config.STEP_DEG
     mesh = obj.data
     uv = mesh.uv_layers.active.data
@@ -257,7 +384,8 @@ def _assign_tiles(obj, colour, height):
 
         if key not in mat_index:
             mat_index[key] = len(mesh.materials)
-            mesh.materials.append(tile_material(lat0, lon0, colour[key], height[key], obj))
+            mesh.materials.append(tile_material(lat0, lon0, colour[key], height[key], water[key],
+                                                ocean_group, obj))
         poly.material_index = mat_index[key]
 
         # Map each corner into the tile's 0..1 square.

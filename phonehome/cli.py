@@ -13,6 +13,14 @@ def _yesterday_utc():
     return datetime.datetime.now(datetime.timezone.utc).date() - datetime.timedelta(days=1)
 
 
+def _srgb_hex_to_linear(hexcode):
+    h = hexcode.lstrip("#")
+    if len(h) != 6:
+        raise SystemExit(f"--ocean-colour {hexcode}: expected RRGGBB")
+    c = [int(h[i:i + 2], 16) / 255 for i in (0, 2, 4)]
+    return tuple(v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4 for v in c)
+
+
 def parse_args(argv=None):
     if argv is None:
         argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
@@ -36,6 +44,12 @@ def parse_args(argv=None):
     e.add_argument("--exaggeration", type=float, default=20.0,
                    help="terrain height multiplier; 1 = true relief (default 20)")
     e.add_argument("--tile-px", type=int, default=512, help="colour tile size in px (default 512)")
+    e.add_argument("--ocean-water", type=float, default=0.0,
+                   help="oceans: 0 = bathymetric map, 1 = water shader (default 0)")
+    e.add_argument("--ocean-roughness", type=float, default=0.3,
+                   help="water shader roughness; lower = tighter sun glint (default 0.3)")
+    e.add_argument("--ocean-colour", default=None, metavar="RRGGBB",
+                   help="water shader colour as an sRGB hex code (default: deep ocean blue)")
 
     c = p.add_argument_group("clouds")
     c.add_argument("--clouds", type=datetime.date.fromisoformat, default=None, metavar="YYYY-MM-DD",
@@ -82,7 +96,10 @@ def main(argv=None):
                              f"{', '.join(st['cloud_dates']) or 'none'} (or use --no-clouds)")
 
     scene.clear()
-    earth_obj = earth.EarthSphere.build(tile_px=args.tile_px, exaggeration=args.exaggeration)
+    ocean_colour = _srgb_hex_to_linear(args.ocean_colour) if args.ocean_colour else earth.OCEAN_COLOUR_DEFAULT
+    earth_obj = earth.EarthSphere.build(tile_px=args.tile_px, exaggeration=args.exaggeration,
+                                        ocean_water=args.ocean_water, ocean_roughness=args.ocean_roughness,
+                                        ocean_colour=ocean_colour)
     sun = scene.add_sun(args.sun_lat, args.sun_lon, args.sun_strength)
     print(f"Earth: {len(earth_obj.data.vertices)} verts, {len(earth_obj.data.materials)} tiles, "
           f"terrain x{args.exaggeration}")
