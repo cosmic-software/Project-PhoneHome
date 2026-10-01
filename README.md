@@ -2,7 +2,11 @@
 
 **A real Earth in Blender, built entirely from NASA data.** Each run downloads (or loads
 from an offline tileset) satellite imagery, terrain and *that day's actual cloud cover*,
-and builds a lit globe with an atmosphere, all from code in headless Blender.
+and builds a lit globe with an atmosphere, all from code in headless Blender. 
+
+The Purpose of this project is to provide a highly realistic and controllable Earth model
+for off-network use. This downloads all the required NASA Tiles and Displacement maps and
+lays each tile down on its respective face.
 
 ![Earth's horizon with atmosphere and clouds](screenshots/horizon.png)
 
