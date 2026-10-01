@@ -19,7 +19,7 @@ git clone https://github.com/cosmic-software/Project-PhoneHome.git
 cd Project-PhoneHome
 ```
 
-**2. Get the tiles** (optional: one download, ~130 MB; afterwards it works offline)
+**2. Get the tiles** (optional: one ~150 MB download; afterwards it works offline)
 
 ```
 python -m phonehome.tileset install
