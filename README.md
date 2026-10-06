@@ -1,5 +1,7 @@
 # Project PhoneHome
 
+**Author:** Ben Gavares (cosmic-software), with Claude (Anthropic).
+
 **A real Earth in Blender, built entirely from NASA data.** Each run downloads (or loads
 from an offline tileset) satellite imagery, terrain and *that day's actual cloud cover*,
 and builds a lit globe with an atmosphere, all from code in headless Blender. 
