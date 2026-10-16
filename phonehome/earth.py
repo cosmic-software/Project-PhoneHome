@@ -8,8 +8,12 @@ reassigning class attributes or subclassing:
     vertices = SEGMENTS * (RINGS - 1) + 2 = 614
     faces    = SEGMENTS * RINGS           = 648  (one NASA tile per face)
 
-Each face gets its own material with two images covering exactly that face's box:
+Each face gets its own material with images covering exactly that face's box:
   - colour:  NASA GIBS WMS, BlueMarble_ShadedRelief_Bathymetry
+  - night:   NASA GIBS WMS, VIIRS_Black_Marble (2016): the same tiling and fetch as the
+             colour map. The atmosphere's Surface Light group turns it into emitted city
+             light on the night side (the map's moonlit-ground floor subtracted), fading in
+             through twilight
   - height:  NASA Visible Earth Blue Marble topography (gebco_08_rev_elev, 21600x10800,
              0 = sea level, 255 = 6400 m), cut into per-face tiles locally
 
@@ -25,6 +29,7 @@ with sun glint (1); its colour is the group's "Ocean Colour" node.
 The mesh is Earth-fixed: +X through (lat 0, lon 0), +Y through (lat 0, lon 90E), +Z north.
 """
 
+import datetime
 import math
 import os
 from concurrent.futures import ThreadPoolExecutor
@@ -37,6 +42,11 @@ from mathutils import Vector
 from . import config, drivers, images, net
 
 GIBS_LAYER = "BlueMarble_ShadedRelief_Bathymetry"
+NIGHT_LAYER = "VIIRS_Black_Marble"
+NIGHT_DATE = datetime.date(2016, 1, 1)    # the 2016 Black Marble composite (also: 2012)
+NIGHT_NODE = "Night Lights"               # image node in each tile, read by Surface Light
+NIGHT_PROP = "night_lights"               # emission strength of the lights
+NIGHT_FLOOR_PROP = "night_floor"          # map level treated as unlit ground (linear)
 
 HEIGHT_URL = ("https://eoimages.gsfc.nasa.gov/images/imagerecords/73000/73934/"
               "gebco_08_rev_elev_21600x10800.png")
@@ -71,7 +81,7 @@ class EarthSphere(metaclass=_Frozen):
 
     @classmethod
     def build(cls, tile_px=512, exaggeration=20.0, ocean_water=0.0, ocean_roughness=0.3,
-              ocean_colour=OCEAN_COLOUR_DEFAULT):
+              ocean_colour=OCEAN_COLOUR_DEFAULT, night=True, night_lights=1.0, night_floor=0.03):
         bpy.ops.mesh.primitive_uv_sphere_add(
             segments=cls.SEGMENTS,
             ring_count=cls.RINGS,
@@ -98,11 +108,17 @@ class EarthSphere(metaclass=_Frozen):
         drivers.set_prop(obj, OCEAN_ROUGHNESS_PROP, ocean_roughness, soft_max=1.0,
                          description="Water shader roughness: lower = tighter, brighter sun glint")
 
+        drivers.set_prop(obj, NIGHT_PROP, night_lights, soft_max=10.0,
+                         description="City lights on the night side (Black Marble): emission strength")
+        drivers.set_prop(obj, NIGHT_FLOOR_PROP, night_floor, soft_max=0.2,
+                         description="Black Marble brightness (linear luminance) treated as unlit, moonlit ground and removed")
+
         colour = fetch_colour_tiles(tile_px)
+        night_tiles = fetch_night_tiles(tile_px) if night else {}
         height = cut_height_tiles()
         water = make_water_tiles(colour, height)
         ocean = build_ocean_group(obj, ocean_colour)
-        _assign_tiles(obj, colour, height, water, ocean)
+        _assign_tiles(obj, colour, height, water, ocean, night_tiles)
         add_sphere_modifiers(obj, cls.SUBDIV_VIEWPORT, cls.SUBDIV_RENDER)
         return obj
 
@@ -169,6 +185,42 @@ def fetch_colour_tiles(tile_px):
     net.init()
     with ThreadPoolExecutor(max_workers=8) as pool:
         paths = list(pool.map(lambda t: _fetch_colour_tile(*t, tile_px), tiles))
+    return dict(zip(tiles, paths))
+
+
+# ---------------------------------------------------------------- night tiles (GIBS Black Marble)
+
+def night_tile_path(lat0, lon0):
+    return config.data_path("night_tiles", f"{NIGHT_LAYER}_{lat0:+03d}_{lon0:+04d}.jpg")
+
+
+def _fetch_night_tile(lat0, lon0, tile_px):
+    path = night_tile_path(lat0, lon0)
+    if os.path.exists(path) and os.path.getsize(path) > 0:
+        return path
+    data = net.gibs_tile(NIGHT_LAYER, lat0, lon0, tile_px, NIGHT_DATE)
+    tmp = path + ".part"
+    with open(tmp, "wb") as f:
+        f.write(data)
+    os.replace(tmp, path)
+    return path
+
+
+def fetch_night_tiles(tile_px):
+    """Black Marble tile per face, cached like the colour tiles. Returns {} if they can't be
+    had (offline without them in the tileset): the Earth is then built without night lights."""
+    tiles = config.tiles()
+    os.makedirs(config.data_path("night_tiles"), exist_ok=True)
+    missing = [t for t in tiles if not os.path.exists(night_tile_path(*t))]
+    if missing:
+        if net.OFFLINE:
+            print(f"Night lights: {len(missing)} of {len(tiles)} night tiles missing offline -- skipped "
+                  f"(run once online, or install a tileset that has night_tiles/)")
+            return {}
+        print(f"Downloading {len(missing)} of {len(tiles)} night tiles from NASA GIBS ({tile_px}px)...")
+    net.init()
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        paths = list(pool.map(lambda t: _fetch_night_tile(*t, tile_px), tiles))
     return dict(zip(tiles, paths))
 
 
@@ -320,7 +372,7 @@ def build_ocean_group(earth_obj, ocean_colour):
 
 # ---------------------------------------------------------------- materials
 
-def tile_material(lat0, lon0, colour_path, height_path, water_path, ocean_group, earth):
+def tile_material(lat0, lon0, colour_path, height_path, water_path, ocean_group, earth, night_path=None):
     mat = bpy.data.materials.new(f"Earth_{lat0:+03d}_{lon0:+04d}")
     mat["tile_lat0"], mat["tile_lon0"] = lat0, lon0
     mat.displacement_method = 'BOTH'
@@ -351,6 +403,13 @@ def tile_material(lat0, lon0, colour_path, height_path, water_path, ocean_group,
     links.new(ocean.outputs["Colour"], bsdf.inputs["Base Color"])
     links.new(ocean.outputs["Roughness"], bsdf.inputs["Roughness"])
 
+    if night_path:
+        ntex = nodes.new("ShaderNodeTexImage")
+        ntex.name = ntex.label = NIGHT_NODE
+        ntex.location = (-400, 550)
+        ntex.image = bpy.data.images.load(night_path, check_existing=True)   # sRGB, like the day map
+        ntex.extension = 'EXTEND'
+
     htex = nodes.new("ShaderNodeTexImage")
     htex.name = htex.label = "Height"
     htex.location = (-400, -150)
@@ -371,7 +430,7 @@ def tile_material(lat0, lon0, colour_path, height_path, water_path, ocean_group,
     return mat
 
 
-def _assign_tiles(obj, colour, height, water, ocean_group):
+def _assign_tiles(obj, colour, height, water, ocean_group, night=None):
     step = config.STEP_DEG
     mesh = obj.data
     uv = mesh.uv_layers.active.data
@@ -385,7 +444,7 @@ def _assign_tiles(obj, colour, height, water, ocean_group):
         if key not in mat_index:
             mat_index[key] = len(mesh.materials)
             mesh.materials.append(tile_material(lat0, lon0, colour[key], height[key], water[key],
-                                                ocean_group, obj))
+                                                ocean_group, obj, (night or {}).get(key)))
         poly.material_index = mat_index[key]
 
         # Map each corner into the tile's 0..1 square.

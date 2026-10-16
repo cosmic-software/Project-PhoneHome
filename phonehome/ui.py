@@ -5,8 +5,10 @@ which finds this project folder next to the .blend. All the code lives here in t
 package; the .blend only carries the loader.
 
 Panels:
+  PhoneHome Sun         UTC date + hour (moves the Sun live), Now, Place Sun (re-creates a
+                        deleted Sun), sub-solar point / distance read-out, strength at 1 AU
   PhoneHome Earth       terrain exaggeration; oceans: bathymetric map <-> water shader slider,
-                        water colour, water roughness
+                        water colour, water roughness; night lights strength + floor
   PhoneHome Clouds      date boxes + Load Clouds, cached (offline) dates, offline switch,
                         cloud brightness, relief mode dropdown (Bump / Displacement)
                         + strength/billow/height,
@@ -22,7 +24,7 @@ import time
 
 import bpy
 
-from . import atmosphere, clouds, config, earth, net, tileset
+from . import atmosphere, clouds, config, earth, net, sun, tileset
 
 LOADER_NAME = "phonehome_ui.py"
 LOADER = '''"""PhoneHome control panel loader -- runs when this .blend opens (click Allow Execution).
@@ -82,7 +84,45 @@ def _offline_update(self, context):
     net.OFFLINE = self.phonehome_offline
 
 
-# ---------------------------------------------------------------- operator
+# ---------------------------------------------------------------- keep the shaders on the Sun
+
+def _follow_sun(scene, depsgraph=None):
+    """After any change: if the Sun lamp was replaced, deleted or re-picked in the panel,
+    point the Sun Direction drivers at the scene's current sun lamp (or at none)."""
+    earth_obj = bpy.data.objects.get(config.EARTH_NAME)
+    if earth_obj is None or bpy.data.node_groups.get(atmosphere.SUN_DIR_GROUP) is None:
+        return
+    lamp = sun.find(earth_obj)
+    if lamp is not atmosphere.bound_sun() or earth_obj.get(atmosphere.SUN_PROP) is not lamp:
+        atmosphere.bind_sun(earth_obj, lamp)
+
+
+# ---------------------------------------------------------------- operators
+
+class PHONEHOME_OT_place_sun(bpy.types.Operator):
+    """Put the Sun where it is at the date and UTC hour above (creates the Sun lamp if it's gone)"""
+    bl_idname = "phonehome.place_sun"
+    bl_label = "Place Sun"
+
+    def execute(self, context):
+        earth_obj = bpy.data.objects.get(config.EARTH_NAME)
+        try:
+            sun.place(earth_obj)
+        except ValueError as e:
+            self.report({'ERROR'}, f"Invalid date: {e}")
+            return {'CANCELLED'}
+        return {'FINISHED'}
+
+
+class PHONEHOME_OT_sun_now(bpy.types.Operator):
+    """Set the date and hour to now (UTC) and move the Sun there"""
+    bl_idname = "phonehome.sun_now"
+    bl_label = "Now"
+
+    def execute(self, context):
+        sun.set_time(bpy.data.objects.get(config.EARTH_NAME), datetime.datetime.now(datetime.timezone.utc))
+        return {'FINISHED'}
+
 
 class PHONEHOME_OT_load_clouds(bpy.types.Operator):
     """Fetch that day's VIIRS clouds (or load them from the tileset) onto the cloud shell"""
@@ -165,6 +205,33 @@ def _visibility(layout, name, label):
         row.prop(obj, "hide_render", text="(render)")
 
 
+class PHONEHOME_PT_sun(_EarthPanel, bpy.types.Panel):
+    bl_label = "PhoneHome Sun"
+
+    def draw(self, context):
+        obj, layout = _earth(context), self.layout
+        if not hasattr(obj, sun.TIME_PROPS[0]):
+            layout.label(text="Reload the panel (run phonehome_ui.py)")
+            return
+        row = layout.row(align=True)
+        for p in sun.TIME_PROPS[:3]:
+            row.prop(obj, p)
+        row = layout.row(align=True)
+        row.prop(obj, sun.TIME_PROPS[3], slider=True)
+        row.operator(PHONEHOME_OT_sun_now.bl_idname, text="Now")
+        lamp = sun.find(obj)
+        if lamp is None:
+            layout.label(text="No Sun lamp in the scene", icon='ERROR')
+        layout.operator(PHONEHOME_OT_place_sun.bl_idname, icon='LIGHT_SUN')
+        if sun.SUBSOLAR_PROPS[0] in obj:
+            lat, lon = obj[sun.SUBSOLAR_PROPS[0]], obj[sun.SUBSOLAR_PROPS[1]]
+            layout.label(text=f"Overhead at {abs(lat):.2f}°{'N' if lat >= 0 else 'S'}, "
+                              f"{abs(lon):.2f}°{'E' if lon >= 0 else 'W'};  "
+                              f"{obj.get(sun.DISTANCE_PROP, 1.0):.4f} AU")
+        if sun.STRENGTH_PROP in obj:
+            layout.prop(obj, f'["{sun.STRENGTH_PROP}"]', text="Strength at 1 AU")
+
+
 class PHONEHOME_PT_terrain(_EarthPanel, bpy.types.Panel):
     bl_label = "PhoneHome Earth"
 
@@ -180,6 +247,12 @@ class PHONEHOME_PT_terrain(_EarthPanel, bpy.types.Panel):
         if ng and "Ocean Colour" in ng.nodes:
             box.prop(ng.nodes["Ocean Colour"].outputs[0], "default_value", text="Water Colour")
         box.prop(obj, f'["{earth.OCEAN_ROUGHNESS_PROP}"]', text="Water Roughness (glint)")
+        if earth.NIGHT_PROP in obj:
+            box = layout.box()
+            box.label(text="Night lights (NASA Black Marble 2016)")
+            row = box.row(align=True)
+            row.prop(obj, f'["{earth.NIGHT_PROP}"]', text="Strength")
+            row.prop(obj, f'["{earth.NIGHT_FLOOR_PROP}"]', text="Floor")
 
 
 class PHONEHOME_PT_clouds(_EarthPanel, bpy.types.Panel):
@@ -250,7 +323,8 @@ class PHONEHOME_PT_atmosphere(_EarthPanel, bpy.types.Panel):
         _visibility(layout, config.ATMOSPHERE_NAME, "Atmosphere")
 
 
-_classes = (PHONEHOME_OT_load_clouds, PHONEHOME_PT_terrain, PHONEHOME_PT_clouds, PHONEHOME_PT_atmosphere)
+_classes = (PHONEHOME_OT_load_clouds, PHONEHOME_OT_place_sun, PHONEHOME_OT_sun_now,
+            PHONEHOME_PT_sun, PHONEHOME_PT_terrain, PHONEHOME_PT_clouds, PHONEHOME_PT_atmosphere)
 
 
 def register():
@@ -262,6 +336,8 @@ def register():
         description="Never download: use only tiles already on disk (installed tileset / cache)",
         update=_offline_update)
     clouds.register_props()
+    sun.register_props()
+    bpy.app.handlers.depsgraph_update_post.append(_follow_sun)
 
 
 def unregister():
@@ -272,3 +348,7 @@ def unregister():
         del bpy.types.Scene.phonehome_offline
     if hasattr(bpy.types.Object, clouds.RELIEF_PROP):
         delattr(bpy.types.Object, clouds.RELIEF_PROP)
+    sun.unregister_props()
+    handlers = bpy.app.handlers.depsgraph_update_post
+    for h in [h for h in handlers if getattr(h, "__name__", "") == "_follow_sun"]:
+        handlers.remove(h)

@@ -171,6 +171,14 @@ def _finish(g, gout):
 
 # ---------------------------------------------------------------- shared groups
 
+# The Sun Direction drivers read the lamp object itself (not a path through
+# Earth["atmosphere_sun"]): Blender only re-evaluates a driver when its target ID changes,
+# so a path through the Earth's pointer property went stale when the Sun was rotated,
+# replaced or deleted. bind_sun() retargets them.
+_SUN_PATHS = {**{f'nodes["Towards Sun"].inputs[{i}].default_value': f"matrix_world[2][{i}]" for i in range(3)},
+              'nodes["Sun Strength"].outputs[0].default_value': "data.energy"}
+
+
 def build_sun_group(earth_obj):
     """Node group with outputs Direction (world unit vector towards the sun) and Strength."""
     ng = bpy.data.node_groups.get(SUN_DIR_GROUP)
@@ -184,10 +192,10 @@ def build_sun_group(earth_obj):
 
     xyz = ng.nodes.new("ShaderNodeCombineXYZ")
     xyz.name = xyz.label = "Towards Sun"
+    xyz.inputs[2].default_value = 1.0
     for i in range(3):
         # A light shines down its local -Z, so its +Z axis (matrix column 2) points at the sun.
-        # RNA paths index matrices [column][row].
-        _drive(xyz.inputs[i], "default_value", earth_obj, f'["{SUN_PROP}"].matrix_world[2][{i}]')
+        xyz.inputs[i].driver_add("default_value")
     norm = ng.nodes.new("ShaderNodeVectorMath")
     norm.operation = 'NORMALIZE'
     norm.location = (150, 0)
@@ -197,9 +205,45 @@ def build_sun_group(earth_obj):
     strength = ng.nodes.new("ShaderNodeValue")
     strength.name = strength.label = "Sun Strength"
     strength.location = (0, -200)
-    _drive(strength.outputs[0], "default_value", earth_obj, f'["{SUN_PROP}"].data.energy')
+    strength.outputs[0].driver_add("default_value")
     ng.links.new(strength.outputs[0], out.inputs["Strength"])
+    bind_sun(earth_obj, earth_obj.get(SUN_PROP))
     return ng
+
+
+def bind_sun(earth_obj, sun_obj):
+    """Make `sun_obj` the light the atmosphere, ground and clouds follow (None: no sun)."""
+    if earth_obj.get(SUN_PROP) is not sun_obj:
+        earth_obj[SUN_PROP] = sun_obj
+    ng = bpy.data.node_groups.get(SUN_DIR_GROUP)
+    if ng is None or ng.animation_data is None:
+        return
+    for fc in ng.animation_data.drivers:
+        path = _SUN_PATHS.get(fc.data_path)
+        if path is None:
+            continue
+        drv = fc.driver
+        drv.type = 'SCRIPTED'
+        var = drv.variables[0] if drv.variables else drv.variables.new()
+        var.name, var.type = "v", 'SINGLE_PROP'
+        t = var.targets[0]
+        t.id_type = 'OBJECT'
+        if sun_obj is None:
+            drv.expression = "0"          # no Sun in the scene: no sunlight in the shaders
+        else:
+            t.id, t.data_path = sun_obj, path
+            drv.expression = "v"
+
+
+def bound_sun():
+    """The lamp the Sun Direction drivers currently read (None if unbound)."""
+    ng = bpy.data.node_groups.get(SUN_DIR_GROUP)
+    if ng is None or ng.animation_data is None:
+        return None
+    for fc in ng.animation_data.drivers:
+        if fc.driver.expression == "v" and fc.driver.variables:
+            return fc.driver.variables[0].targets[0].id
+    return None
 
 
 def build_params_group(earth_obj):
@@ -210,7 +254,7 @@ def build_params_group(earth_obj):
     ng, _, gout = _new_group(AIR_PARAMS_GROUP, outputs=(
         ("Ground Radius", F), ("Shell Radius", F), ("Scale Height", F),
         ("View Extinction", V), ("Sun Extinction", V), ("Penumbra", F),
-        ("Twilight", F), ("Sky Colour", C)))
+        ("Twilight", F), ("Sky Colour", C), ("Night Lights", F), ("Night Floor", F)))
     nodes, g = ng.nodes, _G(ng)
     r = config.RADIUS_KM
     p = drivers.prop_path
@@ -244,6 +288,8 @@ def build_params_group(earth_obj):
     sun_ext = driven_rgb("Sun Extinction", {"k": p("atmosphere_density"), "e": p("atmosphere_sun_extinction")},
                          "k * e", -150)
     twilight = driven("Twilight", {"t": p("atmosphere_twilight")}, "t", -300)
+    night = driven("Night Lights", {"n": p(earth.NIGHT_PROP)}, "n", -550)
+    night_floor = driven("Night Floor", {"f": p(earth.NIGHT_FLOOR_PROP)}, "f", -650)
     sky = nodes.new("ShaderNodeRGB")
     sky.name = sky.label = "Sky Colour"
     sky.location = (-400, -400)
@@ -253,7 +299,8 @@ def build_params_group(earth_obj):
 
     for name, sock in (("Ground Radius", ground.outputs[0]), ("Shell Radius", shell), ("Scale Height", H),
                        ("View Extinction", view_ext), ("Sun Extinction", sun_ext), ("Penumbra", penumbra),
-                       ("Twilight", twilight), ("Sky Colour", sky.outputs[0])):
+                       ("Twilight", twilight), ("Sky Colour", sky.outputs[0]),
+                       ("Night Lights", night), ("Night Floor", night_floor)):
         ng.links.new(sock, gout.inputs[name])
     _finish(g, gout)
     return ng
@@ -332,7 +379,7 @@ def build_surface_group(earth_obj):
     ng = bpy.data.node_groups.get(SURFACE_GROUP)
     if ng is not None:
         return ng
-    ng, gin, gout = _new_group(SURFACE_GROUP, inputs=(("Albedo", C), ("Position", V)), outputs=(
+    ng, gin, gout = _new_group(SURFACE_GROUP, inputs=(("Albedo", C), ("Position", V), ("Night", C)), outputs=(
         ("Base Color", C), ("Specular Tint", C), ("Emission Color", C), ("Emission Strength", F)))
     g = _G(ng)
     prm = g.group(build_params_group(earth_obj), y=-400).outputs
@@ -378,8 +425,25 @@ def build_surface_group(earth_obj):
     albedo = gin.outputs["Albedo"]
     ng.links.new(g.vmath('MULTIPLY', albedo, direct), gout.inputs["Base Color"])
     ng.links.new(direct, gout.inputs["Specular Tint"])
-    ng.links.new(g.vmath('MULTIPLY', albedo, sky), gout.inputs["Emission Color"])
-    ng.links.new(g.math('MULTIPLY', sun["Strength"], 1.0 / math.pi), gout.inputs["Emission Strength"])
+    skylight = g.vscale(g.vmath('MULTIPLY', albedo, sky), g.math('MULTIPLY', sun["Strength"], 1.0 / math.pi))
+
+    # Night lights (Black Marble): the map above its moonlit-ground floor, switched on as the
+    # sun sets -- full below 6 deg depression (end of civil twilight), off above 3 deg elevation.
+    # The floor is on luminance, and scales the colour, so dim background of any hue (the
+    # map's blue-tinted moonlit desert and sea) goes while the lights keep their colour.
+    night_rgb = gin.outputs["Night"]
+    lum = g.vmath('DOT_PRODUCT', night_rgb, (0.2126, 0.7152, 0.0722))
+    keep = g.math('DIVIDE', g.math('MAXIMUM', g.math('SUBTRACT', lum, prm["Night Floor"]), 0.0),
+                  g.math('MAXIMUM', lum, 1e-4))
+    lights = g.vscale(night_rgb, keep)
+    lo, hi = math.sin(math.radians(-6.0)), math.sin(math.radians(3.0))
+    s = g.math('DIVIDE', g.math('SUBTRACT', mu, lo), hi - lo, clamp=True)
+    day = g.math('MULTIPLY', g.math('MULTIPLY', s, s), g.math('MULTIPLY_ADD', s, -2.0, 3.0))
+    dark = g.math('MULTIPLY', g.math('SUBTRACT', 1.0, day), prm["Night Lights"])
+    ng.links.new(g.vmath('ADD', skylight, g.vscale(lights, dark)), gout.inputs["Emission Color"])
+    one = g._place(ng.nodes.new("ShaderNodeValue"))
+    one.outputs[0].default_value = 1.0            # the colour above already carries the strengths
+    ng.links.new(one.outputs[0], gout.inputs["Emission Strength"])
     _finish(g, gout)
     return ng
 
@@ -410,6 +474,9 @@ def light_surfaces(earth_obj, materials):
             n.inputs["Albedo"].default_value = base.default_value
         for name in ("Base Color", "Specular Tint", "Emission Color", "Emission Strength"):
             links.new(n.outputs[name], bsdf.inputs[name])
+        night = nodes.get(earth.NIGHT_NODE)
+        if night is not None:
+            links.new(night.outputs["Color"], n.inputs["Night"])
         # The skylight emission is ambient fill, not a light source: without this Cycles turns
         # every subdivided Earth and cloud triangle into a light (gigabytes of light tree).
         mat.cycles.emission_sampling = 'NONE'
@@ -558,4 +625,5 @@ def build(earth_obj, sun, settings=None):
     if clouds_obj is not None:
         surfaces += list(clouds_obj.data.materials)
     light_surfaces(earth_obj, surfaces)
+    bind_sun(earth_obj, sun)
     return atmo

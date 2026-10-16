@@ -2,10 +2,11 @@
 
 Three spheres, all generated from code -- no .blend file is part of the project:
 
-  Earth       36 x 18 sphere, one NASA tile per 10-degree face (GIBS Blue Marble colour
-              + Visible Earth topography displacement)
+  Earth       36 x 18 sphere, one NASA tile per 10-degree face (GIBS Blue Marble colour,
+              GIBS Black Marble night lights, Visible Earth topography displacement)
   Clouds      a slightly larger shell with that day's VIIRS cloud cover
-  Atmosphere  an outer shell with a sun-lit limb glow (Chapman air-column model)
+  Atmosphere  an outer ray-marched shell: Rayleigh scattering with Chapman sun paths
+  Sun         a sun lamp placed for a UTC time (solar position + distance)
 
 Run inside Blender, headless:
 

@@ -1,4 +1,4 @@
-"""Scene setup around the Earth: sun, camera, world, render and (debug) save."""
+"""Scene setup around the Earth: camera, world, render and .blend save (the Sun is sun.py)."""
 
 import math
 
@@ -20,20 +20,6 @@ def unit(lat_deg, lon_deg):
 
 def _look(obj, direction):
     obj.rotation_euler = direction.to_track_quat('-Z', 'Y').to_euler()
-
-
-def add_sun(lat_deg, lon_deg, strength=4.0):
-    """Sun lamp shining from the given sub-solar lat/lon."""
-    data = bpy.data.lights.new(config.SUN_NAME, 'SUN')
-    data.energy = strength
-    # EEVEE's default is 0.001 units = 1 m at our km scale: it overflows the shadow pool
-    # ("Shadow buffer full") and drops shadows. 200 m is finer than a render pixel here.
-    data.shadow_maximum_resolution = 0.2
-    data.angle = math.radians(0.533)   # the sun's real disc: soft shadow edges (penumbra)
-    sun = bpy.data.objects.new(config.SUN_NAME, data)
-    bpy.context.scene.collection.objects.link(sun)
-    _look(sun, -unit(lat_deg, lon_deg))
-    return sun
 
 
 def add_camera(lat_deg, lon_deg, distance_radii=3.5, lens_mm=50.0):
@@ -80,7 +66,7 @@ def save_blend(path):
     from anywhere inside the project folder (data/ next to it).
     """
     from . import ui
-    bpy.context.scene.eevee.shadow_pool_size = '1024'   # same as render(); see add_sun()
+    bpy.context.scene.eevee.shadow_pool_size = '1024'   # same as render(); see sun.ensure()
     r = config.RADIUS_KM
     for screen in bpy.data.screens:
         for area in screen.areas:

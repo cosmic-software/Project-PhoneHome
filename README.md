@@ -65,14 +65,15 @@ height, switch the oceans between the bathymetric map and a water shader, pick a
 
 ## What it builds
 
-Three spheres, parented to the Earth, 1 Blender unit = 1 km, Earth-fixed axes
+Three spheres, parented to the Earth, and the Sun. 1 Blender unit = 1 km, Earth-fixed axes
 (+X through lat 0 / lon 0, +Z north):
 
 | Object | What | Source |
 |---|---|---|
-| **Earth** | Locked 36 × 18 UV sphere (614 verts), one material per 10° face. Colour plus terrain displacement (Displacement and Bump) | NASA GIBS `BlueMarble_ShadedRelief_Bathymetry`; NASA Visible Earth Blue Marble topography (`gebco_08_rev_elev`, 0–6.4 km) |
+| **Earth** | Locked 36 × 18 UV sphere (614 verts), one material per 10° face. Colour plus terrain displacement (Displacement and Bump). A night map, tiled and fetched the same way as the colour map, glows as city lights on the night side, fading in through twilight | NASA GIBS `BlueMarble_ShadedRelief_Bathymetry`; NASA GIBS `VIIRS_Black_Marble` (2016); NASA Visible Earth Blue Marble topography (`gebco_08_rev_elev`, 0–6.4 km) |
 | **Clouds** | Shell above the terrain; per-tile cloud masks for a chosen day, shaped by a shared log curve and Color Ramp | NASA GIBS VIIRS true colour (NOAA-20, NOAA-21, SNPP composite) compared against Blue Marble |
-| **Atmosphere** | Outer shell, ray-marched (16 steps) through an ideal sphere: Rayleigh scattering, with each sample's sunlight dimmed and reddened along its Chapman path to the sun, Earth's shadow softened by the sun's disc (penumbra), and the air in front dimming what's behind it. The limb turns blue → orange → red → dark across the terminator on its own. It also lights the ground and clouds: the low sun reddens before the terminator, and skylight wraps light past it into the twilight band | Shader maths; follows the scene Sun via the shared `Sun Direction` node group |
+| **Sun** | Sun lamp placed for a UTC date and time: sub-solar point and Earth–Sun distance from the NOAA/Meeus solar position algorithm (~0.01°), strength ÷ distance², the Sun's 0.533° disc, 5900 K sunlight | `phonehome/sun.py` |
+| **Atmosphere** | Outer shell, ray-marched (16 steps) through an ideal sphere: Rayleigh scattering, with each sample's sunlight dimmed and reddened along its Chapman path to the sun, Earth's shadow softened by the sun's disc (penumbra), and the air in front dimming what's behind it. The limb turns blue → orange → red → dark across the terminator on its own. It also lights the ground and clouds: the low sun reddens before the terminator, and skylight wraps light past it into the twilight band | Shader maths; follows the scene's sun lamp live via the shared `Sun Direction` node group (drivers on the lamp itself; re-bound if the lamp is replaced or deleted) |
 
 Every control is a custom property on the Earth object (`terrain_exaggeration`,
 `cloud_thin_boost`, `atmosphere_*`), and drivers carry it to all the materials. The
@@ -97,7 +98,10 @@ blender --background --factory-startup --python run_phonehome.py -- [options]
 | `--exaggeration` | 20 | terrain height ×; clouds and atmosphere rise with it |
 | `--ocean-water` | 0 | oceans: 0 = bathymetric map, 1 = water shader |
 | `--ocean-roughness`, `--ocean-colour RRGGBB` | 0.3, deep blue | water shader glint and colour |
-| `--sun-lat`, `--sun-lon` | 10, 70 | sub-solar point (where the sun is overhead) |
+| `--sun-time YYYY-MM-DDTHH:MM` | cloud date, 12:00 UTC | put the Sun where it really is at that time (UTC unless an offset is given) |
+| `--sun-lat`, `--sun-lon` | | instead of `--sun-time`: a sub-solar point by hand |
+| `--sun-strength` | 4 | sun lamp strength at 1 AU (the lamp gets this ÷ distance²) |
+| `--night-lights`, `--night-floor`, `--no-night` | 1, 0.03 | city lights strength; Black Marble brightness removed as unlit ground; skip the night map |
 | `--view-lat`, `--view-lon`, `--view-dist` | 20, 0, 3.5 | camera position (distance in Earth radii) |
 | `--cloud-boost` | 4 | thin-cloud log curve: 0 = linear |
 | `--cloud-relief bump\|displacement` | bump | cloud shading only (fast), or real cloud height and shadow offset (~16× cloud geometry, slower) |
@@ -122,7 +126,8 @@ select the Earth and look in **Object Properties**:
 
 | Panel | Controls |
 |---|---|
-| PhoneHome Earth | terrain exaggeration; **Water Shader** slider (0 = bathymetric map, 1 = flat water with sun glint), water colour, water roughness |
+| PhoneHome Sun | Year / Month / Day / **Hour (UTC)**: moves the Sun live (scrub the hour to sweep the day/night line), **Now**, **Place Sun** (also re-creates a deleted Sun), where the Sun is overhead and the Earth–Sun distance, strength at 1 AU |
+| PhoneHome Earth | terrain exaggeration; **Water Shader** slider (0 = bathymetric map, 1 = flat water with sun glint), water colour, water roughness; night lights strength and floor |
 | PhoneHome Clouds | Year / Month / Day + **Load Clouds**, the dates available offline, an **Offline (tileset only)** switch, **Cloud Brightness**, a **Relief** dropdown (Bump (fast) / Displacement (heavy)) with bump strength, billow and cloud height (offline: tileset dates only), **Haze Clamp** (ocean / land), Thin Cloud Boost + Cloud Ramp, show/hide |
 | PhoneHome Atmosphere | Sun picker, density / brightness / thickness / scale height / forward scatter / sun extinction / twilight, Sky tint, show/hide |
 
@@ -154,7 +159,7 @@ python -m phonehome.tileset install phonehome-tiles.zip              # or your o
 
 The base tileset (colour + terrain, 1,296 tiles) is ~34 MB, plus ~45 MB per cloud date.
 
-**What works offline:** the Earth, terrain, oceans and atmosphere work for any setting. Clouds, including cloud relief (Bump and Displacement), work **only for the cloud dates in the tileset**. The published tileset has **2026-09-28** and **2026-09-29**, so offline renders and displacement must use one of those dates. Cloud height maps for those dates are made locally the first time (~3 min), with no network. Any other cloud date has to be downloaded from NASA first.
+**What works offline:** the Earth, terrain, oceans, Sun and atmosphere work for any setting. Night lights need `night_tiles/`: the published tileset predates them, so run once online (or pack a tileset from a cache that has them, which `pack` then includes); offline without them the Earth is built without night lights. Clouds, including cloud relief (Bump and Displacement), work **only for the cloud dates in the tileset**. The published tileset has **2026-09-28** and **2026-09-29**, so offline renders and displacement must use one of those dates. Cloud height maps for those dates are made locally the first time (~3 min), with no network. Any other cloud date has to be downloaded from NASA first.
 Install checks the manifest and refuses unexpected paths. With `--offline` (CLI), or the
 **Offline** switch in the panel, nothing is downloaded. A missing tile or cloud date
 fails with a message that names the tileset, instead of reaching for the network.
@@ -167,6 +172,7 @@ given date touches the network:
 | Path | Size | |
 |---|---|---|
 | `earth_tiles/` | ~14 MB | 648 GIBS colour tiles |
+| `night_tiles/` | ~5 MB | 648 GIBS Black Marble night tiles (same grid; downloaded once) |
 | `gebco_08_rev_elev_21600x10800.png` | 18 MB | world heightmap (downloaded once) |
 | `terrain_tiles/` | ~20 MB | heightmap cut into per-tile PNGs |
 | `water_tiles/` | ~3 MB | water masks, made locally from the colour + terrain tiles (no download) |
@@ -185,7 +191,8 @@ phonehome/
   clouds.py             VIIRS cloud masks, cloud shell, Cloud Density node group
   atmosphere.py         atmosphere shell (ray-marched), sunlight through the air onto the
                         ground and clouds, Sun Direction node group
-  scene.py              sun, camera, world, render, optional .blend save
+  sun.py                Sun lamp from a UTC time (solar position, distance), time properties
+  scene.py              camera, world, render, optional .blend save
   config.py             paths, constants, tile grid
   net.py                HTTP with retries, GIBS WMS requests
   images.py             OpenImageIO read/write helpers
@@ -199,8 +206,12 @@ phonehome/
 - Ocean floor isn't displaced (land heightmap only). Peaks above 6.4 km are capped.
 - Faint vertical stripes in the clouds where satellite passes meet (haze at the strip edges).
 - The atmosphere is built to be seen from outside the shell. A camera inside it sees no sky.
-- One camera and one sun, both placed by lat/lon. Mission-driven placement (GMAT ephemeris,
-  real sub-solar point from a timestamp) is the natural next step.
+- One camera, placed by lat/lon. The Sun is placed from a timestamp; mission-driven camera
+  placement (GMAT ephemeris) is the natural next step.
+- Cloud shadows scale with the exaggerated cloud height (8 km × exaggeration): with the Sun
+  low, they fall far from their clouds, so tile-sized patches of clear or thin cloud can
+  stand out near the day/night line. Lower `--exaggeration` reduces it.
+- The night map is the 2016 Black Marble composite, not the night of the chosen date.
 
 ## License
 

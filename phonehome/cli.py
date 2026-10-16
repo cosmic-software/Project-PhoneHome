@@ -6,7 +6,7 @@ import os
 import sys
 import time
 
-from . import atmosphere, clouds, config, earth, net, scene
+from . import atmosphere, clouds, config, drivers, earth, net, scene, sun
 
 
 def _yesterday_utc():
@@ -19,6 +19,12 @@ def _srgb_hex_to_linear(hexcode):
         raise SystemExit(f"--ocean-colour {hexcode}: expected RRGGBB")
     c = [int(h[i:i + 2], 16) / 255 for i in (0, 2, 4)]
     return tuple(v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4 for v in c)
+
+
+def _utc_time(text):
+    """ISO date-time, read as UTC unless it carries an offset (e.g. 2026-10-15T18:00)."""
+    t = datetime.datetime.fromisoformat(text.replace("Z", "+00:00"))
+    return t if t.tzinfo else t.replace(tzinfo=datetime.timezone.utc)
 
 
 def parse_args(argv=None):
@@ -50,6 +56,11 @@ def parse_args(argv=None):
                    help="water shader roughness; lower = tighter sun glint (default 0.3)")
     e.add_argument("--ocean-colour", default=None, metavar="RRGGBB",
                    help="water shader colour as an sRGB hex code (default: deep ocean blue)")
+    e.add_argument("--night-lights", type=float, default=1.0,
+                   help="city lights on the night side (NASA Black Marble), emission strength (default 1)")
+    e.add_argument("--night-floor", type=float, default=0.03,
+                   help="Black Marble brightness removed as unlit ground, linear luminance (default 0.03)")
+    e.add_argument("--no-night", action="store_true", help="no night map (skips the night tile download)")
 
     c = p.add_argument_group("clouds")
     c.add_argument("--clouds", type=datetime.date.fromisoformat, default=None, metavar="YYYY-MM-DD",
@@ -79,9 +90,14 @@ def parse_args(argv=None):
         a.add_argument(flag, type=float, default=default, dest=name, help=f"{desc} (default {default})")
 
     s = p.add_argument_group("sun and camera")
-    s.add_argument("--sun-lat", type=float, default=10.0, help="sub-solar latitude (default 10)")
-    s.add_argument("--sun-lon", type=float, default=70.0, help="sub-solar longitude (default 70)")
-    s.add_argument("--sun-strength", type=float, default=4.0, help="sun lamp strength (default 4)")
+    s.add_argument("--sun-time", type=_utc_time, default=None, metavar="YYYY-MM-DDTHH:MM",
+                   help="place the Sun where it is at this time, UTC unless an offset is given "
+                        "(default: the cloud date at 12:00 UTC)")
+    s.add_argument("--sun-lat", type=float, default=None,
+                   help="instead of --sun-time: sub-solar latitude (needs --sun-lon)")
+    s.add_argument("--sun-lon", type=float, default=None, help="instead of --sun-time: sub-solar longitude")
+    s.add_argument("--sun-strength", type=float, default=4.0,
+                   help="sun lamp strength at 1 AU; the lamp gets this / distance^2 (default 4)")
     s.add_argument("--view-lat", type=float, default=20.0, help="camera latitude (default 20)")
     s.add_argument("--view-lon", type=float, default=0.0, help="camera longitude (default 0)")
     s.add_argument("--view-dist", type=float, default=3.5, help="camera distance in Earth radii (default 3.5)")
@@ -96,6 +112,8 @@ def main(argv=None):
         config.set_data_dir(args.data_dir)
     net.OFFLINE = args.offline
     date = args.clouds or _yesterday_utc()
+    if (args.sun_lat is None) != (args.sun_lon is None):
+        raise SystemExit("--sun-lat and --sun-lon go together (or use --sun-time)")
     if date >= datetime.datetime.now(datetime.timezone.utc).date():
         raise SystemExit(f"--clouds {date}: pick a date before today (UTC); today's imagery isn't complete yet")
     if args.offline:
@@ -113,8 +131,19 @@ def main(argv=None):
     ocean_colour = _srgb_hex_to_linear(args.ocean_colour) if args.ocean_colour else earth.OCEAN_COLOUR_DEFAULT
     earth_obj = earth.EarthSphere.build(tile_px=args.tile_px, exaggeration=args.exaggeration,
                                         ocean_water=args.ocean_water, ocean_roughness=args.ocean_roughness,
-                                        ocean_colour=ocean_colour)
-    sun = scene.add_sun(args.sun_lat, args.sun_lon, args.sun_strength)
+                                        ocean_colour=ocean_colour, night=not args.no_night,
+                                        night_lights=args.night_lights, night_floor=args.night_floor)
+    drivers.set_prop(earth_obj, sun.STRENGTH_PROP, args.sun_strength,
+                     "Sun lamp strength at 1 AU (the lamp gets this / distance^2)", soft_max=20.0)
+    when = args.sun_time or datetime.datetime.combine(date, datetime.time(12), datetime.timezone.utc)
+    if args.sun_lat is not None:
+        sun.set_time(earth_obj, when, move=False)
+        sun_obj = sun.place(earth_obj, lat_lon=(args.sun_lat, args.sun_lon))
+        print(f"Sun: sub-solar {args.sun_lat:.2f}, {args.sun_lon:.2f} (manual)")
+    else:
+        sun_obj = sun.place(earth_obj, when)
+        print(f"Sun: {when:%Y-%m-%d %H:%M} UTC -> sub-solar {earth_obj[sun.SUBSOLAR_PROPS[0]]:.2f}, "
+              f"{earth_obj[sun.SUBSOLAR_PROPS[1]]:.2f}, {earth_obj[sun.DISTANCE_PROP]:.4f} AU")
     print(f"Earth: {len(earth_obj.data.vertices)} verts, {len(earth_obj.data.materials)} tiles, "
           f"terrain x{args.exaggeration}")
 
@@ -124,8 +153,8 @@ def main(argv=None):
                      haze_ocean=args.haze_ocean, haze_land=args.haze_land, brightness=args.cloud_brightness)
         print(f"Clouds: {date.isoformat()} ({args.cloud_relief})")
     if not args.no_atmosphere:
-        atmosphere.build(earth_obj, sun, {k: getattr(args, k) for k in atmosphere.DEFAULTS})
-        print(f"Atmosphere: lit by '{sun.name}'")
+        atmosphere.build(earth_obj, sun_obj, {k: getattr(args, k) for k in atmosphere.DEFAULTS})
+        print(f"Atmosphere: lit by '{sun_obj.name}'")
 
     scene.add_camera(args.view_lat, args.view_lon, args.view_dist, args.lens)
     scene.add_world()

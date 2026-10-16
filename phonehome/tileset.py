@@ -1,7 +1,8 @@
 """Offline tileset: pack the downloaded NASA tiles into one zip, install it anywhere.
 
 With the tileset installed, PhoneHome builds and renders with no network access
-(run with --offline to guarantee it). Clouds work offline for any dates in the pack.
+(run with --offline to guarantee it). Clouds work offline for any dates in the pack, and
+night lights when the pack has night_tiles/ (included whenever the cache has all of them).
 
 Plain Python, no Blender needed:
 
@@ -26,6 +27,7 @@ from . import config, net
 FORMAT = 1
 MANIFEST = "phonehome_tileset.json"
 BASE_PARTS = ("earth_tiles", "terrain_tiles")
+OPTIONAL_PARTS = ("night_tiles",)          # packed when complete; night lights need them offline
 
 
 def _count(subdir, ext):
@@ -58,6 +60,7 @@ def status():
         "tiles_expected": n,
         "colour_tiles": colour,
         "terrain_tiles": terrain,
+        "night_tiles": _count("night_tiles", ".jpg"),
         "cloud_dates": cached_cloud_dates(),
         "offline_ready": colour == n and terrain == n,
     }
@@ -74,7 +77,8 @@ def pack(out_path, cloud_dates=()):
         raise SystemExit(f"no complete cloud tiles cached for {', '.join(missing)}; "
                          f"cached: {', '.join(st['cloud_dates']) or 'none'}")
 
-    parts = list(BASE_PARTS) + [os.path.join("cloud_tiles", d) for d in dates]
+    optional = [p for p in OPTIONAL_PARTS if _count(p, ".jpg") == st["tiles_expected"]]
+    parts = list(BASE_PARTS) + optional + [os.path.join("cloud_tiles", d) for d in dates]
     manifest = {
         "format": FORMAT,
         "created": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
@@ -95,7 +99,7 @@ def pack(out_path, cloud_dates=()):
                 files += 1
     size = os.path.getsize(out_path) / 1e6
     print(f"Packed {files} tiles ({size:.0f} MB) -> {out_path}")
-    print(f"  base tiles + clouds for: {', '.join(dates) or '(no cloud dates)'}")
+    print(f"  base tiles{' + night lights' if optional else ''} + clouds for: {', '.join(dates) or '(no cloud dates)'}")
     return out_path
 
 
