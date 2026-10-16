@@ -72,7 +72,7 @@ Three spheres, parented to the Earth, 1 Blender unit = 1 km, Earth-fixed axes
 |---|---|---|
 | **Earth** | Locked 36 × 18 UV sphere (614 verts), one material per 10° face. Colour plus terrain displacement (Displacement and Bump) | NASA GIBS `BlueMarble_ShadedRelief_Bathymetry`; NASA Visible Earth Blue Marble topography (`gebco_08_rev_elev`, 0–6.4 km) |
 | **Clouds** | Shell above the terrain; per-tile cloud masks for a chosen day, shaped by a shared log curve and Color Ramp | NASA GIBS VIIRS true colour (NOAA-20, NOAA-21, SNPP composite) compared against Blue Marble |
-| **Atmosphere** | Outer additive shell; limb glow from a Chapman air-column model, coloured by sun angle (night → twilight → day), forward scattering | Shader maths; follows the scene Sun via the shared `Sun Direction` node group |
+| **Atmosphere** | Outer shell, ray-marched (16 steps) through an ideal sphere: Rayleigh scattering, with each sample's sunlight dimmed and reddened along its Chapman path to the sun, Earth's shadow softened by the sun's disc (penumbra), and the air in front dimming what's behind it. The limb turns blue → orange → red → dark across the terminator on its own. It also lights the ground and clouds: the low sun reddens before the terminator, and skylight wraps light past it into the twilight band | Shader maths; follows the scene Sun via the shared `Sun Direction` node group |
 
 Every control is a custom property on the Earth object (`terrain_exaggeration`,
 `cloud_thin_boost`, `atmosphere_*`), and drivers carry it to all the materials. The
@@ -105,6 +105,7 @@ blender --background --factory-startup --python run_phonehome.py -- [options]
 | `--haze-ocean`, `--haze-land` | 0.2, 0 | haze clamp: cloud values below this become clear sky |
 | `--cloud-brightness` | 0.75 | cloud reflectance: 1 = pure white, real cloud tops ~0.6–0.8 |
 | `--atmo-density`, `--atmo-brightness`, `--atmo-thickness-km`, `--atmo-scale-height`, `--atmo-forward-scatter` | 0.08, 0.6, 100, 0.25, 2 | atmosphere look |
+| `--atmo-sun-extinction`, `--atmo-twilight` | 1, 0.1 | reddening of sunlight through the air; skylight wrapping past the day/night line |
 | `--engine`, `--samples`, `--resolution` | EEVEE, engine default, 1024 | render settings |
 | `--render PATH` / `--no-render` | `output/phonehome_<date>.png` | where to write the PNG |
 | `--save-blend PATH` | off | also save the scene as a `.blend` with the control panel |
@@ -123,7 +124,7 @@ select the Earth and look in **Object Properties**:
 |---|---|
 | PhoneHome Earth | terrain exaggeration; **Water Shader** slider (0 = bathymetric map, 1 = flat water with sun glint), water colour, water roughness |
 | PhoneHome Clouds | Year / Month / Day + **Load Clouds**, the dates available offline, an **Offline (tileset only)** switch, **Cloud Brightness**, a **Relief** dropdown (Bump (fast) / Displacement (heavy)) with bump strength, billow and cloud height (offline: tileset dates only), **Haze Clamp** (ocean / land), Thin Cloud Boost + Cloud Ramp, show/hide |
-| PhoneHome Atmosphere | Sun picker, density / brightness / thickness / scale height / forward scatter, Sky Colour ramp, show/hide |
+| PhoneHome Atmosphere | Sun picker, density / brightness / thickness / scale height / forward scatter / sun extinction / twilight, Sky tint, show/hide |
 
 Every setting is also stored as a property on the Earth object, under **Object Properties →
 Custom Properties**. Change values here directly, or animate them with keyframes:
@@ -182,7 +183,8 @@ phonehome/
   cli.py                argument parsing, run order
   earth.py              EarthSphere (locked geometry), colour + terrain tiles, materials
   clouds.py             VIIRS cloud masks, cloud shell, Cloud Density node group
-  atmosphere.py         atmosphere shell, Sun Direction node group
+  atmosphere.py         atmosphere shell (ray-marched), sunlight through the air onto the
+                        ground and clouds, Sun Direction node group
   scene.py              sun, camera, world, render, optional .blend save
   config.py             paths, constants, tile grid
   net.py                HTTP with retries, GIBS WMS requests

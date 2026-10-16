@@ -29,6 +29,7 @@ def add_sun(lat_deg, lon_deg, strength=4.0):
     # EEVEE's default is 0.001 units = 1 m at our km scale: it overflows the shadow pool
     # ("Shadow buffer full") and drops shadows. 200 m is finer than a render pixel here.
     data.shadow_maximum_resolution = 0.2
+    data.angle = math.radians(0.533)   # the sun's real disc: soft shadow edges (penumbra)
     sun = bpy.data.objects.new(config.SUN_NAME, data)
     bpy.context.scene.collection.objects.link(sun)
     _look(sun, -unit(lat_deg, lon_deg))

@@ -12,7 +12,7 @@ Panels:
                         + strength/billow/height,
                         thin-cloud boost + Cloud Ramp, show/hide
   PhoneHome Atmosphere  sun picker, density/brightness/thickness/scale height/forward
-                        scatter, Sky Colour ramp, show/hide
+                        scatter/sun extinction/twilight, Sky Colour tint, show/hide
 """
 
 import datetime
@@ -242,11 +242,11 @@ class PHONEHOME_PT_atmosphere(_EarthPanel, bpy.types.Panel):
         col.prop(obj, f'["{atmosphere.SUN_PROP}"]', text="Sun")
         for name in atmosphere.DEFAULTS:
             col.prop(obj, f'["{name}"]', text=name.replace("atmosphere_", "").replace("_", " ").title())
-        mat = bpy.data.materials.get(config.ATMOSPHERE_NAME)
-        if mat and "Sky Colour" in mat.node_tree.nodes:
+        ng = bpy.data.node_groups.get(atmosphere.AIR_PARAMS_GROUP)
+        if ng and "Sky Colour" in ng.nodes:
             box = layout.box()
-            box.label(text="Sky colour by sun angle (night → twilight → day)")
-            box.template_color_ramp(mat.node_tree.nodes["Sky Colour"], "color_ramp", expand=True)
+            box.label(text="Sky tint (sunset colours come from the sunlight's path through the air)")
+            box.prop(ng.nodes["Sky Colour"].outputs[0], "default_value", text="")
         _visibility(layout, config.ATMOSPHERE_NAME, "Atmosphere")
 
 
