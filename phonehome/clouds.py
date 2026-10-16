@@ -26,8 +26,9 @@ Cloud relief (shading + shadows), two modes:
   BUMP          Bump node on the normal only. Full mask detail (~2 km/px), shades the cloud
                 tops, costs nothing extra. Clouds stay geometrically flat.
   DISPLACEMENT  Bump plus real displacement of the shell by density * Earth["cloud_relief_km"],
-                with the shell subdivided further. Cloud tops rise, shadows fall with the
-                true height offset, tops show on the horizon. ~16x the cloud geometry at render.
+                with the shell subdivided further (at least levels 2 / 5; the previous levels
+                come back when switching to Bump). Cloud tops rise, shadows fall with the
+                true height offset, tops show on the horizon.
 """
 
 import datetime
@@ -59,7 +60,7 @@ RELIEF_PROP = "phonehome_cloud_relief"
 RELIEF_ITEMS = [
     ('BUMP', "Bump (fast)", "Shading on the cloud tops only: full detail, no extra render cost"),
     ('DISPLACEMENT', "Displacement (heavy)",
-     "Real cloud height and shadow offset; ~16x cloud geometry, slower renders and more memory"),
+     "Real cloud height and shadow offset; more cloud geometry (levels >= 2 / 5), slower"),
 ]
 BRIGHTNESS_PROP = "cloud_brightness"          # cloud base colour (reflectance), 0..1
 RELIEF_KM_PROP = "cloud_relief_km"            # displacement height of the densest cloud
@@ -70,8 +71,11 @@ HAZE_LAND_PROP = "cloud_haze_land"            # haze cutoff over land, 0..1
 BILLOW_PROP = "cloud_billow"                  # 3D noise on the cloud height, 0..1
 HEIGHT_GROUP = "Cloud Height"
 HEIGHT_BLUR_PX = 4                            # box radius; 3 passes ~ gaussian sigma 7 px (~14 km)
-# (viewport, render) subdivision of the cloud shell per mode
-RELIEF_SUBDIV = {"BUMP": (3, 4), "DISPLACEMENT": (4, 6)}
+# (viewport, render) subdivision of the cloud shell: what a new shell gets (bump mode), and the
+# minimum Displacement mode needs. Switching modes never lowers the user's own levels, and
+# switching back to Bump restores whatever they had before.
+RELIEF_SUBDIV = {"BUMP": (1, 2), "DISPLACEMENT": (2, 5)}
+_SAVED_LEVELS = "phonehome_bump_levels"      # on the Clouds object: levels from before Displacement
 
 # Shell height above the sphere, per unit of terrain_exaggeration. 8 km clears the 6.4 km
 # terrain cap at any exaggeration, so mountains never poke through the clouds.
@@ -448,8 +452,17 @@ def _apply_relief(clouds_obj, mode):
             mat.displacement_method = 'DISPLACEMENT'   # fine detail already comes from the Bump node
         else:
             mat.displacement_method = 'BUMP'
-    sub = clouds_obj.modifiers["Subdivide"]
-    sub.levels, sub.render_levels = RELIEF_SUBDIV[mode]
+    sub = clouds_obj.modifiers.get("Subdivide")
+    if sub is None:
+        return
+    if mode == "DISPLACEMENT":
+        if _SAVED_LEVELS not in clouds_obj:
+            clouds_obj[_SAVED_LEVELS] = (sub.levels, sub.render_levels)
+        lo_view, lo_render = RELIEF_SUBDIV["DISPLACEMENT"]
+        sub.levels, sub.render_levels = max(sub.levels, lo_view), max(sub.render_levels, lo_render)
+    elif _SAVED_LEVELS in clouds_obj:
+        sub.levels, sub.render_levels = (int(v) for v in clouds_obj[_SAVED_LEVELS])
+        del clouds_obj[_SAVED_LEVELS]
 
 
 def _relief_changed(self, context):

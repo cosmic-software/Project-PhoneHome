@@ -8,7 +8,7 @@ ideal (analytic) shell, so nothing depends on the faceted mesh:
     enter at t0 = -(P.D) - sqrt(Rs^2 - b^2)
     leave at t1 = -(P.D) + sqrt(Rs^2 - b^2), or at the ground -(P.D) - sqrt(R^2 - b^2)
     SAMPLES midpoints between t0 and t1; at each one:
-        density   rho = exp(-altitude / H),  H = scale height
+        density   rho = exp(-altitude / H),  H = scale height, tapered to 0 at the shell top
         sunlight  T_sun = exp(-k_sun * beta * Chapman column towards the sun) * Earth shadow
         view      T_view = exp(-k * beta * air column back to the camera)
         light    += k * beta * T_sun * T_view * rho * ds / H
@@ -345,7 +345,15 @@ def build_air_sample_group(earth_obj):
     lit = g.math('MULTIPLY', g.math('MULTIPLY', s, s), g.math('MULTIPLY_ADD', s, -2.0, 3.0))
 
     T = g.vscale(g.exp_neg(g.vscale(prm["Sun Extinction"], col)), lit)
-    ng.links.new(rho, gout.inputs["Density"])
+    # Density for the glow tapers to exactly 0 at the top of the shell, (rho - rho_top) /
+    # (1 - rho_top), instead of stopping at rho_top (~2 %): the limb fades out smoothly and still
+    # ends at the shell's height. (The sun-path columns above keep the plain exponential; the
+    # difference is that same ~2 % of the thinnest air.)
+    rho_top = g.math('EXPONENT', g.math('MULTIPLY', g.math('DIVIDE',
+                     g.math('SUBTRACT', prm["Shell Radius"], R), H), -1.0))
+    rho_glow = g.math('DIVIDE', g.math('MAXIMUM', g.math('SUBTRACT', rho, rho_top), 0.0),
+                      g.math('MAXIMUM', g.math('SUBTRACT', 1.0, rho_top), 1e-4))
+    ng.links.new(rho_glow, gout.inputs["Density"])
     ng.links.new(T, gout.inputs["Sun Transmittance"])
     _finish(g, gout)
     return ng
@@ -379,15 +387,19 @@ def build_surface_group(earth_obj):
     ng = bpy.data.node_groups.get(SURFACE_GROUP)
     if ng is not None:
         return ng
-    ng, gin, gout = _new_group(SURFACE_GROUP, inputs=(("Albedo", C), ("Position", V), ("Night", C)), outputs=(
-        ("Base Color", C), ("Specular Tint", C), ("Emission Color", C), ("Emission Strength", F)))
+    ng, gin, gout = _new_group(SURFACE_GROUP, inputs=(("Albedo", C), ("Position", V), ("Night", C), ("Height", F)),
+                               outputs=(("Base Color", C), ("Specular Tint", C), ("Emission Color", C),
+                                        ("Emission Strength", F), ("Sun Cosine", F)))
     g = _G(ng)
     prm = g.group(build_params_group(earth_obj), y=-400).outputs
     sun = g.group(build_sun_group(earth_obj), y=-600).outputs
-    pos = gin.outputs["Position"]          # Earth space, km (linked per material: EEVEE ignores
-                                           # a Texture Coordinate node's object inside a group)
     L = g.to_object(sun["Direction"])
     R, H, ext = prm["Ground Radius"], prm["Scale Height"], prm["Sun Extinction"]
+    # Only the direction comes from the mesh (Earth space, linked per material: EEVEE ignores a
+    # Texture Coordinate node's object inside a group). The radius is the ideal sphere's, R +
+    # Height (the true, unexaggerated altitude of the surface), so the lighting -- above all the
+    # Earth-shadow edge -- doesn't step from face to face at low subdivision levels.
+    pos = g.vscale(g.vmath('NORMALIZE', gin.outputs["Position"]), g.math('ADD', R, gin.outputs["Height"]))
 
     # r, mu = radius and sun cosine at the point. The skylight below uses the same Chapman
     # physics as Air Sample in closed form (one lookup, not a column of samples), since this
@@ -444,42 +456,185 @@ def build_surface_group(earth_obj):
     one = g._place(ng.nodes.new("ShaderNodeValue"))
     one.outputs[0].default_value = 1.0            # the colour above already carries the strengths
     ng.links.new(one.outputs[0], gout.inputs["Emission Strength"])
+    ng.links.new(mu, gout.inputs["Sun Cosine"])
     _finish(g, gout)
     return ng
 
 
+# Cloud shadows: the shell sits at 8 km x terrain exaggeration (160 km by default), so with the
+# sun low its shadows land 1000+ km from their clouds, as tile-shaped dark patches. They fade
+# out between these sun elevations (shadow rays only; the clouds themselves are unchanged).
+CLOUD_SHADOW_FADE_DEG = (5.0, 25.0)
+_SURFACE_OUTPUTS = ("Base Color", "Specular Tint", "Emission Color", "Emission Strength")
+CLOUD_SHADOW_NODE = "Low Sun Shadow"
+
+
+def _cloud_shadow_fade(mat, surface_node):
+    """Alpha for shadow rays = alpha * smoothstep(sun elevation). Idempotent."""
+    nodes, links = mat.node_tree.nodes, mat.node_tree.links
+    if CLOUD_SHADOW_NODE in nodes:
+        return
+    bsdf = nodes["Principled BSDF"]
+    alpha = bsdf.inputs["Alpha"]
+    if not alpha.is_linked:
+        return
+    src = alpha.links[0].from_socket
+    x, y = bsdf.location.x - 220, bsdf.location.y - 400
+    lo, hi = (math.sin(math.radians(d)) for d in CLOUD_SHADOW_FADE_DEG)
+    ramp = nodes.new("ShaderNodeMapRange")
+    ramp.name = ramp.label = CLOUD_SHADOW_NODE
+    ramp.interpolation_type = 'SMOOTHSTEP'
+    ramp.inputs["From Min"].default_value, ramp.inputs["From Max"].default_value = lo, hi
+    ramp.location = (x - 200, y)
+    links.new(surface_node.outputs["Sun Cosine"], ramp.inputs["Value"])
+    path = nodes.new("ShaderNodeLightPath")
+    path.location = (x - 400, y - 150)
+    # factor = 1 for camera rays; ramp for shadow rays
+    fac = nodes.new("ShaderNodeMix")
+    fac.data_type = 'FLOAT'
+    fac.location = (x - 50, y)
+    links.new(path.outputs["Is Shadow Ray"], fac.inputs["Factor"])
+    fac.inputs["A"].default_value = 1.0
+    links.new(ramp.outputs["Result"], fac.inputs["B"])
+    mul = nodes.new("ShaderNodeMath")
+    mul.operation = 'MULTIPLY'
+    mul.location = (x + 120, y)
+    links.new(src, mul.inputs[0])
+    links.new(fac.outputs["Result"], mul.inputs[1])
+    links.new(mul.outputs[0], alpha)
+
+
 def light_surfaces(earth_obj, materials):
-    """Route each Principled material's albedo through Surface Light. Idempotent."""
+    """Route each Principled material's albedo through Surface Light. Idempotent: also
+    re-applies the per-material settings to tiles that already have it."""
     group = build_surface_group(earth_obj)
     for mat in materials:
-        nodes, links = mat.node_tree.nodes, mat.node_tree.links
-        if SURFACE_GROUP in nodes:
-            continue
-        bsdf = nodes["Principled BSDF"]
-        base = bsdf.inputs["Base Color"]
-        n = nodes.new("ShaderNodeGroup")
-        n.name = n.label = SURFACE_GROUP
-        n.node_tree = group
-        n.location = (bsdf.location.x - 220, bsdf.location.y + 250)
-        tc = nodes.new("ShaderNodeTexCoord")
-        tc.name = tc.label = "Earth Space"
-        tc.object = earth_obj
-        tc.location = (n.location.x - 200, n.location.y)
-        links.new(tc.outputs["Object"], n.inputs["Position"])
-        if base.is_linked:
-            src = base.links[0].from_socket
-            links.remove(base.links[0])
-            links.new(src, n.inputs["Albedo"])
-        else:
-            n.inputs["Albedo"].default_value = base.default_value
-        for name in ("Base Color", "Specular Tint", "Emission Color", "Emission Strength"):
-            links.new(n.outputs[name], bsdf.inputs[name])
-        night = nodes.get(earth.NIGHT_NODE)
-        if night is not None:
-            links.new(night.outputs["Color"], n.inputs["Night"])
-        # The skylight emission is ambient fill, not a light source: without this Cycles turns
-        # every subdivided Earth and cloud triangle into a light (gigabytes of light tree).
-        mat.cycles.emission_sampling = 'NONE'
+        nodes = mat.node_tree.nodes
+        n = nodes.get(SURFACE_GROUP) or _add_surface_node(earth_obj, mat, group)
+        bsdf, links = nodes["Principled BSDF"], mat.node_tree.links
+        for name in _SURFACE_OUTPUTS:                   # always by name (see _swap_group)
+            if not any(l.from_node is n and l.from_socket.name == name for l in bsdf.inputs[name].links):
+                for l in list(bsdf.inputs[name].links):
+                    links.remove(l)
+                links.new(n.outputs[name], bsdf.inputs[name])
+        is_cloud = mat.name.startswith(config.CLOUDS_NAME)
+        # Lighting uses the true altitude, not the exaggerated shell: clouds see the sun ~3 deg
+        # past the terminator, as real 8 km cloud tops do.
+        n.inputs["Height"].default_value = clouds.CLOUD_ALT_KM if is_cloud else 0.0
+        if is_cloud:
+            _cloud_shadow_fade(mat, n)
+
+
+def _add_surface_node(earth_obj, mat, group):
+    nodes, links = mat.node_tree.nodes, mat.node_tree.links
+    bsdf = nodes["Principled BSDF"]
+    base = bsdf.inputs["Base Color"]
+    n = nodes.new("ShaderNodeGroup")
+    n.name = n.label = SURFACE_GROUP
+    n.node_tree = group
+    n.location = (bsdf.location.x - 220, bsdf.location.y + 250)
+    tc = nodes.new("ShaderNodeTexCoord")
+    tc.name = tc.label = "Earth Space"
+    tc.object = earth_obj
+    tc.location = (n.location.x - 200, n.location.y)
+    links.new(tc.outputs["Object"], n.inputs["Position"])
+    if base.is_linked:
+        src = base.links[0].from_socket
+        links.remove(base.links[0])
+        links.new(src, n.inputs["Albedo"])
+    else:
+        n.inputs["Albedo"].default_value = base.default_value
+    night = nodes.get(earth.NIGHT_NODE)
+    if night is not None:
+        links.new(night.outputs["Color"], n.inputs["Night"])
+    # The skylight emission is ambient fill, not a light source: without this Cycles turns
+    # every subdivided Earth and cloud triangle into a light (gigabytes of light tree).
+    mat.cycles.emission_sampling = 'NONE'
+    return n
+
+
+# The shell mesh is drawn slightly larger than the sphere the shader integrates (Shell Radius):
+# its flat faces sit inside their vertices' sphere (by up to 1 - cos(7.1 deg) at subdivision
+# level 0), and any glow outside the mesh would be clipped into a faceted edge. The shader works
+# from the ideal radius, so the size of the glow doesn't change.
+SHELL_MESH_MARGIN = 1.0 / math.cos(math.radians(7.1))
+
+
+def drive_shell_scale(atmo, earth_obj):
+    r = config.RADIUS_KM
+    variables = {"exag": drivers.prop_path(config.EXAGGERATION_PROP),
+                 "thick": drivers.prop_path("atmosphere_thickness_km"),
+                 "relief": drivers.prop_path(clouds.RELIEF_KM_PROP)}
+    for axis in range(3):
+        atmo.driver_remove("scale", axis)
+        drivers.drive(atmo, "scale", earth_obj, variables,
+                      f"({r} + {clouds.shell_altitude_expr()} + relief + thick) / {r} * {SHELL_MESH_MARGIN:.5f}", axis)
+
+
+def _swap_group(tree, node, new_tree):
+    """Point a group node at another tree, keeping its links by socket *name* (Blender keeps
+    them by socket identifier, which shifts when the new group has a different socket list)."""
+    ins = [(l.from_socket, sock.name) for sock in node.inputs for l in sock.links]
+    outs = [(sock.name, l.to_socket) for sock in node.outputs for l in sock.links]
+    vals = {sock.name: sock.default_value for sock in node.inputs
+            if not sock.is_linked and hasattr(sock, "default_value")}
+    node.node_tree = new_tree
+    for sock in list(node.inputs) + list(node.outputs):
+        for l in list(sock.links):
+            tree.links.remove(l)
+    for src, name in ins:
+        if name in node.inputs:
+            tree.links.new(src, node.inputs[name])
+    for name, dst in outs:
+        if name in node.outputs:
+            tree.links.new(node.outputs[name], dst)
+    for name, v in vals.items():
+        if name in node.inputs and hasattr(node.inputs[name], "default_value"):
+            try:
+                node.inputs[name].default_value = v
+            except (TypeError, ValueError):
+                pass
+
+
+def update_shaders(earth_obj):
+    """Rebuild the shared atmosphere / lighting node groups in an existing scene, in place.
+
+    For a scene built by an older PhoneHome: objects, modifiers, images and settings are left
+    alone; only the node groups' maths is replaced, the tile materials re-wired and the
+    atmosphere mesh's size driver refreshed. The Sky
+    tint is kept; the Sun Direction group (with its binding to the Sun lamp) is kept as is.
+    """
+    old = {}
+    keep_sky = None
+    for name in (SURFACE_GROUP, ATMO_STEP_GROUP, AIR_SAMPLE_GROUP, AIR_PARAMS_GROUP):
+        ng = bpy.data.node_groups.get(name)
+        if ng is not None:
+            if name == AIR_PARAMS_GROUP and "Sky Colour" in ng.nodes:
+                keep_sky = tuple(ng.nodes["Sky Colour"].outputs[0].default_value)
+            ng.name = name + " (old)"
+            old[name] = ng
+    new = {AIR_PARAMS_GROUP: build_params_group(earth_obj), AIR_SAMPLE_GROUP: build_air_sample_group(earth_obj),
+           ATMO_STEP_GROUP: build_step_group(earth_obj), SURFACE_GROUP: build_surface_group(earth_obj)}
+    if keep_sky is not None:
+        new[AIR_PARAMS_GROUP].nodes["Sky Colour"].outputs[0].default_value = keep_sky
+    trees = [m.node_tree for m in bpy.data.materials if m.node_tree] + list(bpy.data.node_groups)
+    for tree in trees:
+        for node in tree.nodes:
+            if node.type == 'GROUP' and node.node_tree is not None:
+                for name, ng in old.items():
+                    if node.node_tree is ng:
+                        _swap_group(tree, node, new[name])
+    for ng in old.values():
+        bpy.data.node_groups.remove(ng)
+    surfaces = list(earth_obj.data.materials)
+    clouds_obj = bpy.data.objects.get(config.CLOUDS_NAME)
+    if clouds_obj is not None:
+        surfaces += list(clouds_obj.data.materials)
+    light_surfaces(earth_obj, surfaces)
+    atmo = bpy.data.objects.get(config.ATMOSPHERE_NAME)
+    if atmo is not None:
+        drive_shell_scale(atmo, earth_obj)
+    bind_sun(earth_obj, earth_obj.get(SUN_PROP))
 
 
 # ---------------------------------------------------------------- atmosphere material
@@ -610,15 +765,11 @@ def build(earth_obj, sun, settings=None):
     atmo.visible_shadow = False
     atmo.visible_diffuse = atmo.visible_glossy = atmo.visible_transmission = False
     atmo.visible_volume_scatter = False
-    earth.add_sphere_modifiers(atmo, 3, 4)
+    # Low levels are enough: the glow comes from the ideal sphere, and the mesh only has to
+    # cover it (SHELL_MESH_MARGIN).
+    earth.add_sphere_modifiers(atmo, 1, 2)
 
-    r = config.RADIUS_KM
-    variables = {"exag": drivers.prop_path(config.EXAGGERATION_PROP),
-                 "thick": drivers.prop_path("atmosphere_thickness_km"),
-                 "relief": drivers.prop_path(clouds.RELIEF_KM_PROP)}
-    for axis in range(3):
-        drivers.drive(atmo, "scale", earth_obj, variables,
-                      f"({r} + {clouds.shell_altitude_expr()} + relief + thick) / {r}", axis)
+    drive_shell_scale(atmo, earth_obj)
 
     surfaces = list(earth_obj.data.materials)
     clouds_obj = bpy.data.objects.get(config.CLOUDS_NAME)

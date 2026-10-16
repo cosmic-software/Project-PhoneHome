@@ -14,7 +14,8 @@ Panels:
                         + strength/billow/height,
                         thin-cloud boost + Cloud Ramp, show/hide
   PhoneHome Atmosphere  sun picker, density/brightness/thickness/scale height/forward
-                        scatter/sun extinction/twilight, Sky Colour tint, show/hide
+                        scatter/sun extinction/twilight, Sky Colour tint, show/hide,
+                        Update Shaders (new shader code into an existing scene, in place)
 """
 
 import datetime
@@ -111,6 +112,22 @@ class PHONEHOME_OT_place_sun(bpy.types.Operator):
         except ValueError as e:
             self.report({'ERROR'}, f"Invalid date: {e}")
             return {'CANCELLED'}
+        return {'FINISHED'}
+
+
+class PHONEHOME_OT_update_shaders(bpy.types.Operator):
+    """Replace this scene's atmosphere and lighting shader maths with the project's current code.
+Objects, modifiers, images and settings are kept"""
+    bl_idname = "phonehome.update_shaders"
+    bl_label = "Update Shaders"
+
+    def execute(self, context):
+        earth_obj = bpy.data.objects.get(config.EARTH_NAME)
+        if earth_obj is None or bpy.data.objects.get(config.ATMOSPHERE_NAME) is None:
+            self.report({'ERROR'}, "No PhoneHome atmosphere in this scene")
+            return {'CANCELLED'}
+        atmosphere.update_shaders(earth_obj)
+        self.report({'INFO'}, "Shaders updated")
         return {'FINISHED'}
 
 
@@ -321,9 +338,10 @@ class PHONEHOME_PT_atmosphere(_EarthPanel, bpy.types.Panel):
             box.label(text="Sky tint (sunset colours come from the sunlight's path through the air)")
             box.prop(ng.nodes["Sky Colour"].outputs[0], "default_value", text="")
         _visibility(layout, config.ATMOSPHERE_NAME, "Atmosphere")
+        layout.operator(PHONEHOME_OT_update_shaders.bl_idname, icon='FILE_REFRESH')
 
 
-_classes = (PHONEHOME_OT_load_clouds, PHONEHOME_OT_place_sun, PHONEHOME_OT_sun_now,
+_classes = (PHONEHOME_OT_load_clouds, PHONEHOME_OT_place_sun, PHONEHOME_OT_sun_now, PHONEHOME_OT_update_shaders,
             PHONEHOME_PT_sun, PHONEHOME_PT_terrain, PHONEHOME_PT_clouds, PHONEHOME_PT_atmosphere)
 
 

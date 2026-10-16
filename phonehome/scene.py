@@ -78,6 +78,8 @@ def save_blend(path):
                     space.clip_start = 1.0
                     space.clip_end = r * 100
                     space.shading.type = 'MATERIAL'
+                    # Material Preview's studio HDRI ignores the Sun: light it like the render
+                    space.shading.use_scene_lights = space.shading.use_scene_world = True
                     space.region_3d.view_location = (0.0, 0.0, 0.0)
                     space.region_3d.view_distance = r * 4
     ui.embed_loader()

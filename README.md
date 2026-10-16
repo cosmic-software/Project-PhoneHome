@@ -104,7 +104,7 @@ blender --background --factory-startup --python run_phonehome.py -- [options]
 | `--night-lights`, `--night-floor`, `--no-night` | 1, 0.03 | city lights strength; Black Marble brightness removed as unlit ground; skip the night map |
 | `--view-lat`, `--view-lon`, `--view-dist` | 20, 0, 3.5 | camera position (distance in Earth radii) |
 | `--cloud-boost` | 4 | thin-cloud log curve: 0 = linear |
-| `--cloud-relief bump\|displacement` | bump | cloud shading only (fast), or real cloud height and shadow offset (~16× cloud geometry, slower) |
+| `--cloud-relief bump\|displacement` | bump | cloud shading only (fast), or real cloud height and shadow offset (more cloud geometry, slower) |
 | `--cloud-bump`, `--cloud-billow`, `--cloud-relief-km` | 0.5, 0.4, 25 | relief strength, billow texture, cloud height |
 | `--haze-ocean`, `--haze-land` | 0.2, 0 | haze clamp: cloud values below this become clear sky |
 | `--cloud-brightness` | 0.75 | cloud reflectance: 1 = pure white, real cloud tops ~0.6–0.8 |
@@ -144,6 +144,38 @@ code or defaults:
 ```powershell
 .\run.ps1 --no-render --save-blend blender\phonehome.blend [same options as a render]
 ```
+
+To bring new shader code into a scene you've already set up (your own modifier levels,
+camera, settings), use **Update Shaders** in the PhoneHome Atmosphere panel instead: it
+replaces only the atmosphere and lighting node maths and re-wires the tile materials.
+
+## Viewport performance
+
+PhoneHome is meant to be used live in the viewport, so new scenes start light:
+
+| Object | Subdivision (viewport / render) | |
+|---|---|---|
+| Earth | 1 / 6 | 2.6k faces in the viewport; terrain detail comes from the Bump half of the displacement |
+| Clouds | 1 / 2 | Displacement relief raises this to at least 2 / 5, and switching back to Bump restores your own levels |
+| Atmosphere | 1 / 2 | the glow is computed on an ideal sphere; the mesh only has to cover it |
+
+Lighting never depends on the mesh: the atmosphere ray-marches an analytic shell, and the
+ground and cloud lighting take only the direction from the mesh and the radius from the ideal
+sphere. Low levels change the silhouette (by under 0.1 % of the radius) and coarse terrain
+displacement, not the shading. Change the levels to suit your machine; nothing in PhoneHome
+resets them.
+
+Measured in Material Preview on an RTX 3060 (2100 × 1154 viewport, everything visible):
+about 21 ms per frame while orbiting (~47 fps): Earth ~9 ms, clouds ~8 ms, atmosphere ~6.5 ms.
+The atmosphere keeps 16 ray-march steps: with fewer, rays that cross the Earth's shadow edge
+are visibly off (95th-percentile error 3.3 % at 16 steps, 4.9 % at 12, 8.3 % at 8).
+
+- **Material Preview** uses the scene's Sun and world (saved that way in PhoneHome files);
+  with Blender's studio light instead, the ground would be lit by one light and shaded by
+  another. **Solid** mode stays the fastest way to frame shots.
+- Changes that make EEVEE rebuild shaders (e.g. toggling the Sun's shadow, first opening the
+  file) pause the viewport for ~10 s while it builds code for the 1,296 tile materials.
+  Moving the Sun, the camera, or any slider doesn't.
 
 ## Offline tileset
 

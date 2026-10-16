@@ -73,7 +73,10 @@ class EarthSphere(metaclass=_Frozen):
     FACE_COUNT = SEGMENTS * RINGS
     RADIUS_KM = config.RADIUS_KM
     NAME = config.EARTH_NAME
-    SUBDIV_VIEWPORT = 4     # 64k faces in the viewport
+    # Viewport-first: level 1 (2.6k faces) keeps the viewport fast. The lighting works from the
+    # ideal sphere, not the mesh, so low levels change only the silhouette (< 0.001 R) and the
+    # coarse terrain displacement; the Bump half of the displacement carries the detail.
+    SUBDIV_VIEWPORT = 1
     SUBDIV_RENDER = 6       # 2.65M faces at render, ~17 km vertex spacing
 
     def __init_subclass__(cls, **kwargs):
