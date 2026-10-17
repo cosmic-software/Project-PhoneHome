@@ -2,6 +2,11 @@
 
 **Author:** Ben Gavares (cosmic-software), with Claude (Anthropic).
 
+**Contributor:** Atinder Singh (Atinder513) — the ray-marched atmosphere (physically based
+Rayleigh scattering with Chapman sun paths and a penumbra-softened terminator), the Sun placed
+from a real UTC time (`phonehome/sun.py`), the Black Marble night lights, and the subdivision-
+independent viewport lighting with *Update Shaders*.
+
 **A real Earth in Blender, built entirely from NASA data.** Each run downloads (or loads
 from an offline tileset) satellite imagery, terrain and *that day's actual cloud cover*,
 and builds a lit globe with an atmosphere, all from code in headless Blender. 
